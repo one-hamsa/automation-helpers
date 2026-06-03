@@ -1,0 +1,218 @@
+name: Parse Build Report
+description: >
+  Parse Unity error data into human-readable .txt files — entirely in JavaScript
+  (actions/github-script), so no Python is needed on the runner. Handles two
+  independent concerns in a single call:
+    * compile errors  (flat list from unity-windows-executor `compiler_errors`)
+        -> compile_output_txt, drives the Claude auto-fix path
+    * build-pipeline errors (Unity BuildReport.m_BuildSteps[*].messages[*])
+        -> build_report_output_txt, surfaced to Discord only
+  Each .txt is written ONLY when that concern actually has errors. Optionally
+  persists the raw compile JSON for artifact upload, and can fail the step early
+  when compile errors are found (used by the pre-build compilation test).
+
+inputs:
+  parse_compilation_errors:
+    description: >
+      When 'true', parse compile_errors_content (the flat compiler_errors list
+      emitted by both the compilation test and the build) into compile_output_txt.
+    required: false
+    default: 'false'
+  parse_pipeline_errors:
+    description: >
+      When 'true', parse the Unity BuildReport at build_report_json (a different
+      shape — m_BuildSteps[*].messages[*]) into build_report_output_txt.
+    required: false
+    default: 'false'
+  compile_errors_content:
+    description: Raw compile-errors JSON content (array of {file,line,column,code,message,type}). Used when parse_compilation_errors is true.
+    required: false
+    default: ''
+  compile_output_txt:
+    description: Path to write the parsed compile-errors .txt. Only created when compile errors are found.
+    required: false
+    default: ''
+  build_report_json:
+    description: Path to an existing Unity BuildReport JSON. Used when parse_pipeline_errors is true.
+    required: false
+    default: ''
+  build_report_output_txt:
+    description: Path to write the parsed build-pipeline-errors .txt. Only created when errors are found.
+    required: false
+    default: ''
+
+outputs:
+  has_compile_errors:
+    description: '"true" if compile errors were detected, otherwise "false"'
+    value: ${{ steps.parse.outputs.has_compile_errors }}
+  compile_error_count:
+    description: Number of compile error lines detected
+    value: ${{ steps.parse.outputs.compile_error_count }}
+  has_build_report_errors:
+    description: '"true" if build-pipeline (BuildReport) errors were detected, otherwise "false"'
+    value: ${{ steps.parse.outputs.has_build_report_errors }}
+  build_report_error_count:
+    description: Number of build-pipeline error lines detected
+    value: ${{ steps.parse.outputs.build_report_error_count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Parse Unity error data
+      id: parse
+      uses: actions/github-script@v7.0.1
+      env:
+        PARSE_COMPILATION_ERRORS: ${{ inputs.parse_compilation_errors }}
+        PARSE_PIPELINE_ERRORS: ${{ inputs.parse_pipeline_errors }}
+        COMPILE_ERRORS_CONTENT: ${{ inputs.compile_errors_content }}
+        COMPILE_OUTPUT_TXT: ${{ inputs.compile_output_txt }}
+        BUILD_REPORT_JSON: ${{ inputs.build_report_json }}
+        BUILD_REPORT_OUTPUT_TXT: ${{ inputs.build_report_output_txt }}
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+
+          const TYPE_LABEL = { 0: 'Error', 1: 'Assert', 2: 'Warning', 3: 'Log', 4: 'Exception' };
+          const ERROR_TYPES = new Set([0, 4]);
+
+          const oneLine = (s) =>
+            !s ? '' : String(s).replace(/\r\n|\r|\n/g, ' ').replace(/\s+/g, ' ').trim();
+
+          const stripBom = (s) => (s && s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s);
+
+          function parseJsonStr(raw, label) {
+            if (!raw) return null;
+            const trimmed = stripBom(raw).trim();
+            if (!trimmed) return null;
+            try { return JSON.parse(trimmed); }
+            catch (e) { console.error(`ERROR: failed to parse JSON (${label}): ${e.message}`); return null; }
+          }
+
+          // Compile errors: group by file, dedupe by (file,line,column,code).
+          function parseCompileErrors(items) {
+            const byFile = new Map();
+            const seen = new Set();
+            let total = 0;
+            for (const it of items) {
+              if (!it || typeof it !== 'object') continue;
+              const kind = (it.type || '').toString().toLowerCase();
+              if (kind && kind !== 'error') continue;
+              const f = it.file || '<unknown>';
+              const line = parseInt(it.line, 10) || 0;
+              const col = parseInt(it.column, 10) || 0;
+              const code = it.code || '';
+              const key = `${f}|${line}|${col}|${code}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              if (!byFile.has(f)) byFile.set(f, []);
+              byFile.get(f).push({ line, col, code, kind: kind || 'error', msg: oneLine(it.message || '') });
+              total++;
+            }
+            const out = [];
+            for (const f of [...byFile.keys()].sort()) {
+              const rows = byFile.get(f).sort((a, b) => (a.line - b.line) || (a.col - b.col));
+              if (out.length) out.push('');
+              out.push(`== ${f} ==`);
+              for (const r of rows) {
+                const prefix = r.code ? `[${r.kind} ${r.code} (${r.line},${r.col})]` : `[${r.kind} (${r.line},${r.col})]`;
+                out.push(`${prefix} ${r.msg}`);
+              }
+            }
+            return { lines: out, total };
+          }
+
+          // Build report: group by build step, original order, types 0/4 only.
+          function parseBuildReport(report) {
+            const steps = Array.isArray(report.m_BuildSteps) ? report.m_BuildSteps : [];
+            const out = [];
+            let total = 0;
+            for (const step of steps) {
+              const messages = Array.isArray(step.messages) ? step.messages : [];
+              const stepLines = [];
+              for (const msg of messages) {
+                const t = msg && msg.type;
+                if (!ERROR_TYPES.has(t)) continue;
+                const content = oneLine(msg.content || '');
+                if (!content) continue;
+                const label = TYPE_LABEL[t] !== undefined ? TYPE_LABEL[t] : String(t);
+                stepLines.push(`[${label}] ${content}`);
+                total++;
+              }
+              if (stepLines.length) {
+                if (out.length) out.push('');
+                out.push(`== ${step.stepName || ''} ==`);
+                for (const l of stepLines) out.push(l);
+              }
+            }
+            return { lines: out, total };
+          }
+
+          // Write txt only when errors exist; otherwise remove any stale file.
+          function writeTxt(outPath, lines, total) {
+            if (!outPath) return;
+            try { if (fs.existsSync(outPath)) fs.unlinkSync(outPath); } catch (_) {}
+            if (total > 0) {
+              fs.mkdirSync(path.dirname(outPath), { recursive: true });
+              fs.writeFileSync(outPath, lines.join('\r\n') + '\r\n', 'utf8');
+            }
+          }
+
+          const doCompile = (process.env.PARSE_COMPILATION_ERRORS || '').toLowerCase() === 'true';
+          const doPipeline = (process.env.PARSE_PIPELINE_ERRORS || '').toLowerCase() === 'true';
+          const compileContent = process.env.COMPILE_ERRORS_CONTENT || '';
+          const compileTxt = process.env.COMPILE_OUTPUT_TXT || '';
+          const buildReportJson = process.env.BUILD_REPORT_JSON || '';
+          const buildReportTxt = process.env.BUILD_REPORT_OUTPUT_TXT || '';
+
+          // --- Compile errors (compilation test OR build — same flat shape) ---
+          let compileTotal = 0;
+          if (doCompile && compileTxt) {
+            const data = parseJsonStr(compileContent, 'compile_errors_content');
+            if (Array.isArray(data) && data.length) {
+              const r = parseCompileErrors(data);
+              compileTotal = r.total;
+              writeTxt(compileTxt, r.lines, r.total);
+            } else {
+              writeTxt(compileTxt, [], 0); // clear any stale txt
+            }
+          }
+
+          // --- Build-pipeline (BuildReport) errors — a different shape ---
+          let buildReportTotal = 0;
+          if (doPipeline && buildReportTxt && buildReportJson && fs.existsSync(buildReportJson)) {
+            const raw = fs.readFileSync(buildReportJson, 'utf8');
+            const data = parseJsonStr(raw, buildReportJson);
+            if (data && typeof data === 'object') {
+              const report = data.BuildReport || data;
+              if (report && (report.m_BuildSteps || report.m_Summary)) {
+                const r = parseBuildReport(report);
+                buildReportTotal = r.total;
+                writeTxt(buildReportTxt, r.lines, r.total);
+              }
+            }
+          }
+
+          const hasCompile = compileTotal > 0;
+          const hasBuildReport = buildReportTotal > 0;
+
+          console.log(JSON.stringify({
+            compileContentBytes: compileContent.length,
+            compileTxt: hasCompile ? compileTxt : '(not written — no compile errors)',
+            compileErrorCount: compileTotal,
+            buildReportJson,
+            buildReportTxt: hasBuildReport ? buildReportTxt : '(not written — no build-report errors)',
+            buildReportErrorCount: buildReportTotal,
+          }, null, 2));
+
+          core.setOutput('has_compile_errors', hasCompile ? 'true' : 'false');
+          core.setOutput('compile_error_count', String(compileTotal));
+          core.setOutput('has_build_report_errors', hasBuildReport ? 'true' : 'false');
+          core.setOutput('build_report_error_count', String(buildReportTotal));
+
+          // Fail the step whenever compile errors are present. Callers that must
+          // not abort the job on this (e.g. the post-build parse) use
+          // continue-on-error; the compile-test caller lets it stop the build.
+          if (hasCompile) {
+            core.setFailed(`Compilation reported ${compileTotal} error(s).`);
+          }
