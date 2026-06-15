@@ -85,7 +85,9 @@ CREDENTIALS_FILE = os.path.join(RUNNER_AUTH_DIR, "credentials.json")
 TOKEN_FILE = os.path.join(RUNNER_AUTH_DIR, "token.json")
 
 # GitHub Pages configuration
-GITHUB_TOKEN = "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"
+# PAT is supplied only via the --github-token CLI arg (the .bat passes it,
+# sourced from the UPLOAD_TO_AUTOMATION_REPOS_PAT workflow secret); set in main().
+GITHUB_TOKEN = ""
 GITHUB_REPO_OWNER = "TheTripleL123"
 GITHUB_REPO_NAME = "Bots-Automation-Tests"
 GITHUB_BRANCH = "main"
@@ -522,7 +524,17 @@ def main():
     parser.add_argument("--graph-only", action="store_true", help="Only generate graph")
     parser.add_argument("--upload-only", action="store_true", help="Only upload")
     parser.add_argument("--started-by", default="unknown", help="GitHub username who started the test")
+    parser.add_argument("--github-token", default="",
+                        help="PAT for the GitHub Pages repo (passed in from the workflow secret)")
     args = parser.parse_args()
+
+    # The PAT comes only from --github-token (the .bat forwards the workflow secret).
+    global GITHUB_TOKEN, GITHUB_HEADERS
+    GITHUB_TOKEN = args.github_token
+    GITHUB_HEADERS = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
 
     test_dir = args.test_dir
     folderName = args.folderName
