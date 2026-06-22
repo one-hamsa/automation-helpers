@@ -229,11 +229,24 @@ def upload_file_drive(service, file_path, folder_id, max_retries=3):
 
     metadata = {"name": file_name, "parents": [folder_id]}
 
+    # Resumable for anything over 5MB. Large files (e.g. the multi-GB profiler
+    # .raw) are streamed in 50MB chunks so a single huge request can't time out
+    # and we can report progress as it uploads.
+    resumable = file_size > 5 * 1024 * 1024
+    chunksize = 50 * 1024 * 1024 if resumable else -1
+
     for attempt in range(1, max_retries + 1):
-        media = MediaFileUpload(file_path, mimetype=mime_type, resumable=(file_size > 5 * 1024 * 1024))
+        media = MediaFileUpload(file_path, mimetype=mime_type, resumable=resumable, chunksize=chunksize)
+        request = service.files().create(body=metadata, media_body=media, fields="id,webViewLink")
         try:
-            uploaded = service.files().create(body=metadata, media_body=media, fields="id,webViewLink").execute()
-            return uploaded
+            if resumable:
+                response = None
+                while response is None:
+                    status, response = request.next_chunk()
+                    if status:
+                        print(f"      ...{int(status.progress() * 100)}%")
+                return response
+            return request.execute()
         except Exception as e:
             error_str = str(e)
             is_retryable = any(code in error_str for code in ("500", "502", "503", "429"))
@@ -255,7 +268,8 @@ def upload_to_drive(test_dir, folderName):
     folder_id = create_drive_folder(service, folderName, DRIVE_PARENT_FOLDER_ID)
     drive_folder_link = f"https://drive.google.com/drive/folders/{folder_id}"
 
-    extensions = ("*.csv", "*.png")
+    # .raw is the profiler recording — large, Drive-only (never goes to GitHub).
+    extensions = ("*.csv", "*.png", "*.raw")
     files_to_upload = []
     for ext in extensions:
         files_to_upload.extend(glob.glob(os.path.join(test_dir, ext)))
