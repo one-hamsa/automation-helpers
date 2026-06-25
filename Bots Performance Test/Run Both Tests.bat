@@ -1,11 +1,13 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-:: Usage: "Run Both Tests.bat" <PC_BUILD_DIR> [DRIVE_FOLDER_NAME] [STARTED_BY] [NUMBER_OF_PC_BOTS]
+:: Usage: "Run Both Tests.bat" <PC_BUILD_DIR> [DRIVE_FOLDER_NAME] [STARTED_BY] [NUMBER_OF_PC_BOTS] [COMMIT_SHA] [COMMIT_REF]
 set "PC_BUILD_DIR=%~1"
 set "DRIVE_FOLDER_NAME=%~2"
 set "STARTED_BY=%~3"
 set "NUMBER_OF_PC_BOTS=%~4"
+set "COMMIT_SHA=%~5"
+set "COMMIT_REF=%~6"
 set "SYNC_DIR=%TEMP%\underdogs_bot_sync"
 
 if not defined PC_BUILD_DIR (
@@ -42,6 +44,9 @@ if not exist "!LOG_DIR!" mkdir "!LOG_DIR!"
 :: cmd.exe argument parsing in the start/cmd /c chain.
 set "BOT_FOLDER_NAME=!DRIVE_FOLDER_NAME!"
 set "BOT_STARTED_BY=!STARTED_BY!"
+set "BOT_NUM_PC_BOTS=!NUMBER_OF_PC_BOTS!"
+set "BOT_COMMIT_SHA=!COMMIT_SHA!"
+set "BOT_COMMIT_REF=!COMMIT_REF!"
 
 :: Launch both runners in parallel.
 :: /B = no new window (avoids QuickEdit freezing when the window is clicked).

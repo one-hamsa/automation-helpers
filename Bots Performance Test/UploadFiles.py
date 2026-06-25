@@ -420,7 +420,65 @@ def _parse_folder_name(folder_name):
     return test_name, timestamp
 
 
-def _build_metadata(folder_name, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown"):
+def _find_report_log(test_dir, filename):
+    """Locate a log file under the run's 'Report Logs' folder (adb pull creates
+    a timestamped subfolder). Returns the most-recent match, or None."""
+    pattern = os.path.join(test_dir, "Report Logs", "*", filename)
+    matches = glob.glob(pattern)
+    if not matches:
+        matches = glob.glob(os.path.join(test_dir, "Report Logs", "**", filename), recursive=True)
+    if not matches:
+        return None
+    return max(matches, key=os.path.getmtime)
+
+
+def _count_bots_joined(test_dir):
+    """Count players that connected during the run (the XR bot + the PC bots).
+    Reads the plaintext Global.log and counts 'Player connected:' lines.
+    Returns an int, or None if no Global.log is found.
+    """
+    log_path = _find_report_log(test_dir, "Global.log")
+    if not log_path:
+        print("[BOTS] No Global.log found, skipping bot count.")
+        return None
+    count = 0
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if "Player connected:" in line:
+                count += 1
+    print(f"[BOTS] {count} player(s) connected (from {os.path.basename(log_path)})")
+    return count
+
+
+def _read_log_stats(test_dir):
+    """Sum error and exception counts from the *_log_findings.csv that
+    log_parser.py writes alongside Global.json.log. Returns (errors, exceptions),
+    or (None, None) if no findings CSV is present.
+    """
+    csv_path = _find_report_log(test_dir, "*_log_findings.csv")
+    if not csv_path:
+        print("[LOGSTATS] No *_log_findings.csv found, skipping error/exception counts.")
+        return None, None
+    errors = exceptions = 0
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                try:
+                    n = int(row.get("count") or 0)
+                except ValueError:
+                    n = 0
+                if row.get("kind") == "error":
+                    errors += n
+                elif row.get("kind") == "exception":
+                    exceptions += n
+    except Exception as e:
+        print(f"[LOGSTATS] Failed to read {csv_path}: {e}")
+        return None, None
+    print(f"[LOGSTATS] errors={errors}, exceptions={exceptions} (from {os.path.basename(csv_path)})")
+    return errors, exceptions
+
+
+def _build_metadata(folder_name, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     test_name, timestamp = _parse_folder_name(folder_name)
     entry = {
         "avg_fps": f"{avg_fps:.0f}",
@@ -432,21 +490,23 @@ def _build_metadata(folder_name, avg_fps, drive_link=None, has_thumbnail=False, 
     }
     if drive_link:
         entry["drive_link"] = drive_link
+    if extra:
+        entry.update(extra)
     return entry
 
 
-def _save_local_metadata(test_dir, folder_name, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown"):
+def _save_local_metadata(test_dir, folder_name, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Write metadata.json into the test folder on disk so it's readable offline."""
-    entry = _build_metadata(folder_name, avg_fps, drive_link, has_thumbnail, started_by)
+    entry = _build_metadata(folder_name, avg_fps, drive_link, has_thumbnail, started_by, extra)
     local_path = os.path.join(test_dir, "metadata.json")
     with open(local_path, "w", encoding="utf-8") as f:
         json.dump(entry, f, indent=2)
     print(f"  Saved local metadata: {local_path}")
 
 
-def _github_update_summary(folder_name, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown"):
+def _github_update_summary(folder_name, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Upload a metadata.json file into the test's folder on GitHub Pages."""
-    entry = _build_metadata(folder_name, avg_fps, drive_link, has_thumbnail, started_by)
+    entry = _build_metadata(folder_name, avg_fps, drive_link, has_thumbnail, started_by, extra)
     content = json.dumps(entry, indent=2)
     repo_path = f"AllTestRuns/{folder_name}/metadata.json"
 
@@ -464,7 +524,7 @@ def _github_update_summary(folder_name, avg_fps, drive_link=None, has_thumbnail=
     print(f"  GitHub: Metadata uploaded — {folder_name} avg fps: {avg_fps:.0f}")
 
 
-def upload_to_github(test_dir, folderName, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown"):
+def upload_to_github(test_dir, folderName, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Upload CSV and PNG to GitHub Pages and update the fps summary."""
     print(f"[GITHUB] Uploading run: {folderName}")
 
@@ -513,10 +573,10 @@ def upload_to_github(test_dir, folderName, avg_fps, drive_link=None, has_thumbna
             # Save locally first so the metadata lives alongside the run data
             # on disk even if the GitHub upload fails.
             try:
-                _save_local_metadata(test_dir, folderName, avg_fps, drive_link, has_thumbnail, started_by)
+                _save_local_metadata(test_dir, folderName, avg_fps, drive_link, has_thumbnail, started_by, extra)
             except Exception as e:
                 print(f"  WARNING: Failed to save local metadata.json: {e}")
-            _github_update_summary(folderName, avg_fps, drive_link, has_thumbnail, started_by)
+            _github_update_summary(folderName, avg_fps, drive_link, has_thumbnail, started_by, extra)
     except Exception as e:
         print(f"  WARNING: Failed to update summary: {e}")
         failed.append("summary.json")
@@ -538,6 +598,10 @@ def main():
     parser.add_argument("--graph-only", action="store_true", help="Only generate graph")
     parser.add_argument("--upload-only", action="store_true", help="Only upload")
     parser.add_argument("--started-by", default="unknown", help="GitHub username who started the test")
+    parser.add_argument("--num-pc-bots", default="",
+                        help="Number of PC bots requested (the XR bot is added on top for the 'requested' count)")
+    parser.add_argument("--commit-sha", default="", help="Git commit SHA the build was made from")
+    parser.add_argument("--commit-ref", default="", help="Git branch/ref the build was made from")
     parser.add_argument("--github-token", default="",
                         help="PAT for the GitHub Pages repo (passed in from the workflow secret)")
     args = parser.parse_args()
@@ -649,6 +713,29 @@ def main():
     # in the same folder as the source artifacts (and get uploaded with them).
     run_parsers(test_dir, profiler_raw_path)
 
+    # Extra dashboard metadata gathered from the run's logs.
+    #  - bots_requested: PC bots requested + 1 for the XR/Quest bot.
+    #  - bots_joined:    players that actually connected (XR + PC bots).
+    #  - errors/exceptions: totals from the log parser's findings CSV.
+    extra = {}
+    bots_joined = _count_bots_joined(test_dir)
+    if bots_joined is not None:
+        extra["bots_joined"] = bots_joined
+    try:
+        num_pc_bots = int(args.num_pc_bots)
+    except (ValueError, TypeError):
+        num_pc_bots = None
+    if num_pc_bots is not None and num_pc_bots >= 0:
+        extra["bots_requested"] = num_pc_bots + 1
+    errors, exceptions = _read_log_stats(test_dir)
+    if errors is not None:
+        extra["errors"] = errors
+        extra["exceptions"] = exceptions
+    if args.commit_sha:
+        extra["commit_sha"] = args.commit_sha
+    if args.commit_ref:
+        extra["commit_ref"] = args.commit_ref
+
     if do_upload:
         print("[UPLOAD] Uploading files to Google Drive...")
         try:
@@ -663,7 +750,7 @@ def main():
 
         print("[UPLOAD] Uploading files to GitHub Pages...")
         try:
-            success = upload_to_github(test_dir, folderName, avg_fps, mp4_drive_link, has_thumbnail, args.started_by)
+            success = upload_to_github(test_dir, folderName, avg_fps, mp4_drive_link, has_thumbnail, args.started_by, extra)
             if success:
                 print("[UPLOAD] GitHub upload success.")
                 if profiler_raw_path and os.path.isfile(profiler_raw_path):

@@ -22,8 +22,22 @@ if defined BOT_STARTED_BY (
 )
 if not defined STARTED_BY set "STARTED_BY=unknown"
 if "!STARTED_BY!"=="" set "STARTED_BY=unknown"
+
+:: Number of PC bots requested (the XR bot is added on top by the uploader).
+:: Passed in via env var by Run Both Tests.bat; empty if standalone.
+if defined BOT_NUM_PC_BOTS (
+    set "NUM_PC_BOTS=!BOT_NUM_PC_BOTS!"
+) else (
+    set "NUM_PC_BOTS="
+)
+
+:: Commit/branch the build was made from (set by Run Both Tests.bat; empty if standalone).
+if defined BOT_COMMIT_SHA (set "COMMIT_SHA=!BOT_COMMIT_SHA!") else (set "COMMIT_SHA=")
+if defined BOT_COMMIT_REF (set "COMMIT_REF=!BOT_COMMIT_REF!") else (set "COMMIT_REF=")
 echo The parameter we received is: "!DRIVE_FOLDER_NAME!"
 echo Test started by: "!STARTED_BY!"
+echo Number of PC bots requested: "!NUM_PC_BOTS!"
+echo Build commit: "!COMMIT_SHA!" ref: "!COMMIT_REF!"
 
 :: Get the date and time
 for /f "tokens=1-6 delims= " %%a in ('powershell -Command "Get-Date -format 'dd MM yy HH mm ss'"') do (
@@ -251,7 +265,7 @@ echo ...
 echo [10/10] Generating App CPU Time graph...
 echo ...
 
-python "%~dp0UploadFiles.py" "%CURRENT_TEST_DIR%" "%DRIVE_FOLDER_NAME%" --started-by "%STARTED_BY%" --github-token "%UPLOAD_TO_AUTOMATION_REPOS_PAT%"
+python "%~dp0UploadFiles.py" "%CURRENT_TEST_DIR%" "%DRIVE_FOLDER_NAME%" --started-by "%STARTED_BY%" --num-pc-bots "%NUM_PC_BOTS%" --commit-sha "%COMMIT_SHA%" --commit-ref "%COMMIT_REF%" --github-token "%UPLOAD_TO_AUTOMATION_REPOS_PAT%"
 
 :: ************************************************    RESETTING EVERYTHING BACK AGAIN   ************************************************
 
