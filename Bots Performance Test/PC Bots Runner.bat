@@ -31,13 +31,19 @@ if not exist "!BUILD_DIR!\!EXE_NAME!" (
 :: Add firewall rule via elevated PowerShell so the exe doesn't trigger "allow network access" popup
 echo Adding firewall rule for %EXE_NAME% (may trigger UAC prompt)...
 set "FW_SCRIPT=%TEMP%\underdogs_fw.ps1"
-echo $exe = '%BUILD_DIR%\%EXE_NAME%' > "%FW_SCRIPT%"
-echo netsh advfirewall firewall delete rule name="Underdogs Bot Test" 2^>$null >> "%FW_SCRIPT%"
-echo netsh advfirewall firewall add rule name="Underdogs Bot Test" dir=in action=allow program="$exe" enable=yes >> "%FW_SCRIPT%"
-echo netsh advfirewall firewall add rule name="Underdogs Bot Test" dir=out action=allow program="$exe" enable=yes >> "%FW_SCRIPT%"
+
+:: 1. Define the exact variables using double quotes
+echo $fwRule = "Underdogs Bot Test" > "%FW_SCRIPT%"
+echo $exePath = "%BUILD_DIR%\%EXE_NAME%" >> "%FW_SCRIPT%"
+
+:: 2. Write the netsh commands exactly as they appear in Snippet 1
+echo netsh advfirewall firewall delete rule name="$fwRule" 2^>`$null >> "%FW_SCRIPT%"
+echo netsh advfirewall firewall add rule name="$fwRule" dir=in  action=allow program="$exePath" enable=yes >> "%FW_SCRIPT%"
+echo netsh advfirewall firewall add rule name="$fwRule" dir=out action=allow program="$exePath" enable=yes >> "%FW_SCRIPT%"
+
+:: 3. Run it elevated and clean up
 powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"%FW_SCRIPT%\"' -Verb RunAs -Wait"
 del "%FW_SCRIPT%" >nul 2>&1
-if errorlevel 1 echo WARNING: Firewall rule failed. Popup may appear.
 
 :: Wait for Quest game to start before launching PC instances
 echo Waiting for Quest game to start...
