@@ -1,6 +1,9 @@
 @echo off
 setlocal EnableDelayedExpansion
 
+:: making the adb use the one the profiler project uses so they won't fight over the adb server
+set "PATH=C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Data\PlaybackEngines\AndroidPlayer\SDK\platform-tools;%PATH%"
+
 :: --- CONFIGURATION START ---
 set "ROOT_DIR=C:\Automation\UNDERDOGS Bots Automation\Tests Data"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
@@ -158,7 +161,7 @@ echo [4/10] making sure the quest is on a free performance state...
 echo ...
 
 adb wait-for-device
-:: Lock CPU and GPU to level 3 (Sustained High) to prevent frequency bouncing
+:: release the cpu/gpu locks
 adb shell setprop debug.oculus.cpuLevel -1
 adb shell setprop debug.oculus.gpuLevel -1
 
@@ -174,26 +177,28 @@ echo ...
 echo [5/10] Running game...
 echo ...
 
-:: take a screenshot, Wait 60 sec, take a screenshot again, wait 60 sec, and take a screenshot at the end.
+:: take a screenshot, Wait 30 sec, take a screenshot again, wait 30 sec, and take a screenshot at the end.
 
 echo    Taking screenshot 1 from headset...
 adb wait-for-device
 adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_1.png
 
-ping 127.0.0.1 -n 61 >nul
+ping 127.0.0.1 -n 31 >nul
+
+echo starting the 20 second unity profiling recording to capture the CPU performance, while we do that we keep the adb connection alive every 2 seconds(this script freezes until the unity profiler finishes)
 
 adb wait-for-device
-echo starting the 5 second unity profiling recording to capture the CPU performance
+adb shell input keyevent KEYCODE_WAKEUP
 "C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "C:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "C:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
 
-ping 127.0.0.1 -n 6 >nul
+ping 127.0.0.1 -n 3 >nul
 
 echo    Taking screenshot 2 from headset...
 adb wait-for-device
 adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_2.png
 
 
-ping 127.0.0.1 -n 61 >nul
+ping 127.0.0.1 -n 31 >nul
 
 echo    Taking screenshot 3 from headset...
 adb wait-for-device
