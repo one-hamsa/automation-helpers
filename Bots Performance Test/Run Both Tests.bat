@@ -36,7 +36,7 @@ if exist "%SYNC_DIR%" rd /s /q "%SYNC_DIR%"
 mkdir "%SYNC_DIR%"
 
 :: Log directory for persistent log files
-set "LOG_DIR=C:\Automation\UNDERDOGS Bots Automation\Log Files"
+set "LOG_DIR=E:\Automation\UNDERDOGS Bots Automation\Log Files"
 if not exist "!LOG_DIR!" mkdir "!LOG_DIR!"
 
 :: Pass folder name and started-by via environment variables instead of

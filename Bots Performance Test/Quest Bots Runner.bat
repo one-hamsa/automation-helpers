@@ -5,7 +5,7 @@ setlocal EnableDelayedExpansion
 set "PATH=C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Data\PlaybackEngines\AndroidPlayer\SDK\platform-tools;%PATH%"
 
 :: --- CONFIGURATION START ---
-set "ROOT_DIR=C:\Automation\UNDERDOGS Bots Automation\Tests Data"
+set "ROOT_DIR=E:\Automation\UNDERDOGS Bots Automation\Tests Data"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
 set "SYNC_DIR=%TEMP%\underdogs_bot_sync"
 :: --- CONFIGURATION END ---
@@ -189,7 +189,7 @@ echo starting the 20 second unity profiling recording to capture the CPU perform
 
 adb wait-for-device
 adb shell input keyevent KEYCODE_WAKEUP
-"C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "C:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "C:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
+"C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
 
 ping 127.0.0.1 -n 3 >nul
 

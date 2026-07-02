@@ -30,7 +30,7 @@ DRIVE_PARENT_FOLDER_ID = "1Ckhix2o8tbz3VA6i25UQ1jf7JKx5bkQD"
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 # OAuth credentials — stored on the runner machine, NOT in the repo.
-RUNNER_AUTH_DIR = r"C:\Automation\UNDERDOGS Scene Test Automation\Runner"
+RUNNER_AUTH_DIR = r"E:\Automation\UNDERDOGS Scene Test Automation\Runner"
 CREDENTIALS_FILE = os.path.join(RUNNER_AUTH_DIR, "credentials.json")
 TOKEN_FILE = os.path.join(RUNNER_AUTH_DIR, "token.json")
 

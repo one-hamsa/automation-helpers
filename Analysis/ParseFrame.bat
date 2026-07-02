@@ -6,7 +6,7 @@ REM  The Python script is expected to sit next to this .bat.
 REM ============================================================
 
 REM Path to the Unity profiler recording (.raw) to parse
-set RECORDING_FILE=C:\Automation\UNDERDOGS Bots Automation\Tests Data\BOTS TEST - Name(3_Players) - Started At(23-04-2026_22-30-00)\ProfilerRecording.raw
+set RECORDING_FILE=E:\Automation\UNDERDOGS Bots Automation\Tests Data\BOTS TEST - Name(3_Players) - Started At(23-04-2026_22-30-00)\ProfilerRecording.raw
 
 REM First Unity frame to parse (1-indexed, matches Unity Profiler UI)
 set FIRST_FRAME=750

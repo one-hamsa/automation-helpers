@@ -80,7 +80,7 @@ DRIVE_PARENT_FOLDER_ID = "1Ckhix2o8tbz3VA6i25UQ1jf7JKx5bkQD"
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 # OAuth credentials — stored on the runner machine, NOT in the repo.
-RUNNER_AUTH_DIR = r"C:\Automation\UNDERDOGS Bots Automation\Runner"
+RUNNER_AUTH_DIR = r"E:\Automation\UNDERDOGS Bots Automation\Runner"
 CREDENTIALS_FILE = os.path.join(RUNNER_AUTH_DIR, "credentials.json")
 TOKEN_FILE = os.path.join(RUNNER_AUTH_DIR, "token.json")
 
@@ -690,7 +690,7 @@ def main():
     # Move it into the test directory so it lives alongside the CSV/PNG/logs
     # for this run (and won't be overwritten by the next run).
     import shutil
-    profiler_src_path = r"C:\Automation\Profiler_Test_Result\ProfilerRecording.raw"
+    profiler_src_path = r"E:\Automation\Profiler_Test_Result\ProfilerRecording.raw"
     profiler_raw_path = None
     if os.path.isfile(profiler_src_path):
         raw_size = os.path.getsize(profiler_src_path)

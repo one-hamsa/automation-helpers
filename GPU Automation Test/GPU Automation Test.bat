@@ -2,7 +2,7 @@
 setlocal EnableDelayedExpansion
 
 :: --- CONFIGURATION START ---
-set "ROOT_DIR=C:\Automation\UNDERDOGS Scene Test Automation\Tests Data"
+set "ROOT_DIR=E:\Automation\UNDERDOGS Scene Test Automation\Tests Data"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
 :: --- CONFIGURATION END ---
 
