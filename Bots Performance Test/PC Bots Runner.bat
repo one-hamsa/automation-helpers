@@ -57,7 +57,7 @@ echo Quest game started! Launching PC instances...
 :: Launch instances minimized in parallel
 for /L %%i in (1,1,%INSTANCE_COUNT%) do (
     echo Launching instance %%i...
-    start "" "%BUILD_DIR%\%EXE_NAME%" -batchmode -nographics
+    start "" "%BUILD_DIR%\%EXE_NAME%" -batchmode -nographics -noaudio
     :: delay between launches to avoid file-lock conflicts
     ping 127.0.0.1 -n 6 >nul
 )
