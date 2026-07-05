@@ -92,7 +92,7 @@ echo ...
 
 :: ************************************************   1. WAKING UP & RESTART OVR   ************************************************
 echo ...
-echo [1/10] Enabling GPU profiler and restarting OVR metrics tool...
+echo [1/9] Enabling GPU profiler and restarting OVR metrics tool...
 echo ...
 
 :: Force-stop OVR Metrics Tool to start clean
@@ -113,42 +113,33 @@ adb wait-for-device
 adb shell am start omms://app
 ping 127.0.0.1 -n 5 >nul
 
-:: ************************************************   2. LAUNCHING GAME (RenderDoc injection)   ************************************************
+:: ************************************************   2. LAUNCHING GAME (metrics phase - NO RenderDoc)   ************************************************
 echo ...
-echo [2/10] Launching Underdogs with RenderDoc injection...
+echo [2/9] Launching Underdogs normally for the metrics run...
 echo ...
 
+:: PHASE 1 is a normal, RenderDoc-free run. The Oculus GPU profiler (enabled in step 1) and RenderDoc's
+:: capture layer both hook the GPU driver and cannot coexist: RenderDoc disables ovrgpuprofiler on inject,
+:: which starves the OVR Metrics Tool of App GPU Time data. So metrics come from this clean launch; the
+:: RenderDoc capture happens in a SEPARATE launch afterwards (phase 2, step 7).
 adb wait-for-device
-:: Grab the device serial for the later RenderDoc capture command.
-for /f "delims=" %%s in ('adb get-serialno') do set "SERIAL=%%s"
-echo Device serial: %SERIAL%
+adb shell am start -n com.onehamsa.underdogs/com.unity3d.player.UnityPlayerActivity
 
-:: RenderDoc can only capture an app it LAUNCHED itself (no attach-to-running on Quest). Requires a
-:: DEVELOPMENT build (android:debuggable=true) - a release build can't be injected on a locked headset.
-:: The layer stays resident but idle during the OVR phase; the heavy capture happens later.
-set "RD_LAUNCH_LOG=%CURRENT_TEST_DIR%\renderdoc_launch.json"
-"%RENDERDOC_CMD%" adb-launch --device %SERIAL% --package com.onehamsa.underdogs --skip-controller-check > "%RD_LAUNCH_LOG%" 2>&1
-type "%RD_LAUNCH_LOG%"
-
-:: Extract the ident (the "ident": <number> field) from the JSON, robust to log noise and field order.
-:: Written to a paren-free temp file so the test folder's parentheses can't break for /f parsing.
-set "RD_IDENT="
-powershell -NoProfile -Command "$m=[regex]::Match((Get-Content -Raw '%RD_LAUNCH_LOG%'),([char]34+'ident'+[char]34+'\s*:\s*(\d+)')); if($m.Success){$m.Groups[1].Value}" > "%TEMP%\rd_ident.txt"
-set /p RD_IDENT=<"%TEMP%\rd_ident.txt"
-echo Parsed RenderDoc ident: "%RD_IDENT%"
-
+::sometimes a few seconds after opening a menu pops up, so we focus on the app again
 ping 127.0.0.1 -n 6 >nul
+adb wait-for-device
+adb shell monkey -p com.onehamsa.underdogs -c android.intent.category.LAUNCHER 1
 
 :: ************************************************   3. WAITING FOR THE GAME TO LOAD   ************************************************
 echo ...
-echo [3/10] Waiting a minute for the game to fully load...
+echo [3/9] Waiting a minute for the game to fully load...
 echo ...
 
 ping 127.0.0.1 -n 61 >nul
 
 :: ************************************************ 4. LOCKING HARDWARE PERFORMANCE   ************************************************
 echo ...
-echo [4/10] Forcing OS-level performance locks...
+echo [4/9] Forcing OS-level performance locks...
 echo ...
 
 adb wait-for-device
@@ -165,7 +156,7 @@ ping 127.0.0.1 -n 4 >nul
 
 :: ************************************************   5. RECORDING PERFORMANCE   ************************************************
 echo ...
-echo [5/10] Running game...
+echo [5/9] Running game and taking screenshots...
 echo ...
 
 :: take a screenshot, Wait 1 minute, take a screenshot again, wait a minute, and take a screenshot at the end.
@@ -186,56 +177,29 @@ echo    Taking screenshot 3 from headset...
 adb wait-for-device
 adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_3.png
 
-:: ************************************************   6. CLOSING OVR METRICS   ************************************************
+:: ************************************************   6. END METRICS RUN: STOP OVR + GAME, PULL DATA   ************************************************
 echo ...
-echo [6/10] Closing OVR metrics tool (stops recording; game stays running for the RenderDoc capture)...
+echo [6/9] Stopping OVR metrics and game, then pulling CSV / screenshots / logs...
 echo ...
 
+:: Phase 1 is done: stop the metrics tool (ends CSV recording) and the game.
 adb wait-for-device
 adb shell am force-stop com.oculus.ovrmonitormetricsservice
-
-ping 127.0.0.1 -n 21 >nul
-
-:: ************************************************   7. RENDERDOC CAPTURE   ************************************************
-echo ...
-echo [7/10] Waiting 10s then capturing one frame with RenderDoc...
-echo ...
-
-:: 10s settle after OVR closes, so the capture (and its hitch) never touches the recorded metrics.
-ping 127.0.0.1 -n 11 >nul
-
-if not defined RD_IDENT (
-    echo    WARNING: No RenderDoc ident parsed at launch - skipping capture. Check renderdoc_launch.json ^(likely not a development/debuggable build^).
-) else (
-    echo    Capturing frame with ident %RD_IDENT%...
-    "%RENDERDOC_CMD%" adb-capture --device %SERIAL% --ident %RD_IDENT% --frames 1 --output-dir "%CURRENT_TEST_DIR%"
-)
-
-:: ************************************************   8. STOPPING GAME   ************************************************
-echo ...
-echo [8/10] Stopping Game...
-echo ...
-
-adb wait-for-device
+ping 127.0.0.1 -n 3 >nul
 adb shell am force-stop com.onehamsa.underdogs
-
 ping 127.0.0.1 -n 6 >nul
 
-:: ************************************************   9. DOWNLOADING THE CSV REPORT AND SCREENSHOT   ************************************************
-echo ...
-echo [9/10] Finding CSV report and downloading screenshot...
-echo ...
-
+:: --- CSV report ---
 adb wait-for-device
 for /f "delims=" %%F in ('adb shell "ls -t %REMOTE_PATH% | head -n 1"') do set "LATEST_FILE=%%F"
-
 if "%LATEST_FILE%"=="" (
     echo    ERROR: No CSV file found!
 ) else (
     echo    Found: %LATEST_FILE%
-adb pull "%REMOTE_PATH%/%LATEST_FILE%" "%CURRENT_TEST_DIR%\CSV_REPORT.csv")
+    adb pull "%REMOTE_PATH%/%LATEST_FILE%" "%CURRENT_TEST_DIR%\CSV_REPORT.csv"
+)
 
-:: Download the screenshots from the headset, then delete them
+:: --- Screenshots (pull, then delete from headset) ---
 echo    Downloading screenshots...
 adb wait-for-device
 adb pull /sdcard/AUTOMATION_SCREENSHOT_1.png "%CURRENT_TEST_DIR%\SCREENSHOT_1.png"
@@ -247,22 +211,67 @@ adb shell rm /sdcard/AUTOMATION_SCREENSHOT_3.png
 
 ping 127.0.0.1 -n 4 >nul
 
-:: Pull the game logs folder from the headset into "Report Logs" so we can inspect / parse the in-game
-:: run (spectator join, errors, etc.). Same source + fallback path the Bots runner uses.
+:: --- Game logs ---
+:: Create the destination first and pull the folder CONTENTS ("/Logs/.") so adb doesn't trip over the
+:: destination path. The /sdcard path is the accessible one; the /data/user fallback needs root (usually denied).
 echo    Pulling game logs from headset...
 adb wait-for-device
-adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
+if not exist "%CURRENT_TEST_DIR%\Report Logs" mkdir "%CURRENT_TEST_DIR%\Report Logs"
+adb pull "/sdcard/Android/data/com.onehamsa.underdogs/files/Logs/." "%CURRENT_TEST_DIR%\Report Logs"
 if errorlevel 1 (
     echo Trying alternative path...
-    adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
+    adb pull "/data/user/0/com.onehamsa.underdogs/files/Logs/." "%CURRENT_TEST_DIR%\Report Logs"
 )
 
 ping 127.0.0.1 -n 4 >nul
 
-
-:: ************************************************   10. GENERATE GRAPH AND UPLOAD FILES   ************************************************
+:: ************************************************   7. RENDERDOC CAPTURE (phase 2 - separate launch)   ************************************************
 echo ...
-echo [10/10] Generating App GPU Time graph...
+echo [7/9] RenderDoc phase: relaunching under RenderDoc, waiting a minute, then capturing one frame...
+echo ...
+
+:: Recreate the conditions a manual RenderDoc run has: RenderDoc must be the ONLY thing hooking the GPU.
+:: Turn the Oculus profiler back off (the metrics phase enabled it) so nothing competes with the capture layer.
+adb wait-for-device
+adb shell ovrgpuprofiler -d
+adb shell setprop debug.vr.gpuprofilingservice 0
+
+:: Grab the device serial for the RenderDoc launch/capture commands.
+for /f "delims=" %%s in ('adb get-serialno') do set "SERIAL=%%s"
+echo Device serial: %SERIAL%
+
+:: RenderDoc can only capture an app it LAUNCHED itself (no attach-to-running on Quest). Requires a
+:: DEVELOPMENT build (android:debuggable=true). adb-launch force-stops, relaunches with the capture
+:: layer injected, and returns an "ident" used by the capture below.
+set "RD_LAUNCH_LOG=%CURRENT_TEST_DIR%\renderdoc_launch.json"
+"%RENDERDOC_CMD%" adb-launch --device %SERIAL% --package com.onehamsa.underdogs --skip-controller-check > "%RD_LAUNCH_LOG%" 2>&1
+type "%RD_LAUNCH_LOG%"
+
+:: Extract the ident (the "ident": <number> field) from the JSON, robust to log noise and field order.
+:: Written to a paren-free temp file so the test folder's parentheses can't break for /f parsing.
+set "RD_IDENT="
+powershell -NoProfile -Command "$m=[regex]::Match((Get-Content -Raw '%RD_LAUNCH_LOG%'),([char]34+'ident'+[char]34+'\s*:\s*(\d+)')); if($m.Success){$m.Groups[1].Value}" > "%TEMP%\rd_ident.txt"
+set /p RD_IDENT=<"%TEMP%\rd_ident.txt"
+echo Parsed RenderDoc ident: "%RD_IDENT%"
+
+:: Wait a minute for the scene to render, then capture one frame.
+ping 127.0.0.1 -n 61 >nul
+
+if not defined RD_IDENT (
+    echo    WARNING: No RenderDoc ident parsed at launch - skipping capture. Check renderdoc_launch.json ^(likely not a development/debuggable build^).
+) else (
+    echo    Capturing frame with ident %RD_IDENT%...
+    "%RENDERDOC_CMD%" adb-capture --device %SERIAL% --ident %RD_IDENT% --frames 1 --output-dir "%CURRENT_TEST_DIR%"
+)
+
+:: Stop the game now that the capture is done.
+adb wait-for-device
+adb shell am force-stop com.onehamsa.underdogs
+ping 127.0.0.1 -n 6 >nul
+
+:: ************************************************   8. GENERATE GRAPH AND UPLOAD FILES   ************************************************
+echo ...
+echo [8/9] Generating App GPU Time graph and uploading files...
 echo ...
 
 python "%~dp0UploadFiles.py" "%CURRENT_TEST_DIR%" "%DRIVE_FOLDER_NAME%" --started-by "%STARTED_BY%" --github-token "%UPLOAD_TO_AUTOMATION_REPOS_PAT%"
@@ -270,7 +279,7 @@ python "%~dp0UploadFiles.py" "%CURRENT_TEST_DIR%" "%DRIVE_FOLDER_NAME%" --starte
 :: ************************************************    RESETTING EVERYTHING BACK AGAIN   ************************************************
 
 echo ...
-echo putting the headset in sleep mode and enabling proximity censor again
+echo [9/9] Putting the headset in sleep mode and enabling proximity censor again
 echo ...
 
 :: reset performance locks to default
