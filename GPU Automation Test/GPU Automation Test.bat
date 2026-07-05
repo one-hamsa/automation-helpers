@@ -208,11 +208,6 @@ if not defined RD_IDENT (
 ) else (
     echo    Capturing frame with ident %RD_IDENT%...
     "%RENDERDOC_CMD%" adb-capture --device %SERIAL% --ident %RD_IDENT% --frames 1 --output-dir "%CURRENT_TEST_DIR%"
-    :: Extract a PNG from the .rdc thumbnail so it uploads with the other images.
-    for %%R in ("%CURRENT_TEST_DIR%\*.rdc") do (
-        echo    Extracting PNG from %%~nxR...
-        "%RENDERDOC_CMD%" thumb --out "%CURRENT_TEST_DIR%\RENDERDOC_CAPTURE.png" "%%R"
-    )
 )
 
 :: ************************************************   8. STOPPING GAME   ************************************************
