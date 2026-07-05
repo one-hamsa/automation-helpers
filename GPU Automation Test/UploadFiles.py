@@ -19,7 +19,26 @@ import json
 import base64
 import re
 import argparse
+import subprocess
+from pathlib import Path
 import requests
+
+# Repo-relative path to the log parser (shared with the Bots test).
+# UploadFiles.py lives in <repo>/GPU Automation Test/, the parser in <repo>/Analysis/.
+LOG_PARSER = Path(__file__).resolve().parent.parent / "Analysis" / "log_parser.py"
+
+
+def run_log_parser(test_dir):
+    """Parse the game logs pulled into <test_dir>/Report Logs (writes <session>_log_findings.csv
+    next to each Global.json.log). Best-effort — never fails the upload."""
+    if not LOG_PARSER.is_file():
+        print(f"[PARSE] log_parser.py not found at {LOG_PARSER}, skipping log parse.")
+        return
+    print(f"[PARSE] Running log_parser on {test_dir}")
+    try:
+        subprocess.run([sys.executable or "python", str(LOG_PARSER), test_dir], check=False)
+    except Exception as e:
+        print(f"[PARSE] log_parser crashed: {e}")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -452,6 +471,9 @@ def main():
     if not os.path.isdir(test_dir):
         print(f"ERROR: Directory not found: {test_dir}")
         sys.exit(1)
+
+    # Parse the pulled game logs first so the findings CSV is present for the upload step.
+    run_log_parser(test_dir)
 
     do_graph = not args.upload_only
     do_upload = not args.graph_only

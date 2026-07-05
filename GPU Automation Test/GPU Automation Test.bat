@@ -1,11 +1,17 @@
 @echo off
 setlocal EnableDelayedExpansion
 
+:: Force the project's Unity adb (2022.3.31f1) to the front of PATH so we don't pick up a different
+:: Unity install's adb (e.g. 6000.x) and end up fighting over the adb server. ANDROID_SDK_ROOT/HOME
+:: point renderdoccmd at the SAME SDK (belt-and-suspenders alongside renderdoc.conf's SDKDirPath).
+set "ANDROID_SDK_ROOT=C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Data\PlaybackEngines\AndroidPlayer\SDK"
+set "ANDROID_HOME=%ANDROID_SDK_ROOT%"
+set "PATH=%ANDROID_SDK_ROOT%\platform-tools;%PATH%"
+
 :: --- CONFIGURATION START ---
 set "ROOT_DIR=E:\Automation\UNDERDOGS Scene Test Automation\Tests Data"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
-:: RenderDoc Meta fork (bundled with Quest Developer Hub). %APPDATA% resolves the current user's
-:: Roaming folder, so no username is hardcoded.
+:: RenderDoc Meta fork (bundled with Quest Developer Hub). %APPDATA% avoids hardcoding the username.
 set "RENDERDOC_CMD=%APPDATA%\odh\packages\tools\renderdoc-oculus\renderdoccmd.exe"
 :: --- CONFIGURATION END ---
 
@@ -117,23 +123,18 @@ adb wait-for-device
 for /f "delims=" %%s in ('adb get-serialno') do set "SERIAL=%%s"
 echo Device serial: %SERIAL%
 
-:: RenderDoc on Quest can only capture an app it LAUNCHED itself (there is no attach-to-running), so we
-:: launch through renderdoccmd instead of "am start". The RenderDoc layer stays resident but idle during
-:: the OVR recording phase; the actual (heavy) capture happens later, after OVR is closed.
-:: --skip-controller-check allows launching on the headless rig. adb-launch prints JSON containing the
-:: "ident" we must feed to adb-capture; we tee it to a file and parse the number out.
+:: RenderDoc can only capture an app it LAUNCHED itself (no attach-to-running on Quest). Requires a
+:: DEVELOPMENT build (android:debuggable=true) - a release build can't be injected on a locked headset.
+:: The layer stays resident but idle during the OVR phase; the heavy capture happens later.
 set "RD_LAUNCH_LOG=%CURRENT_TEST_DIR%\renderdoc_launch.json"
 "%RENDERDOC_CMD%" adb-launch --device %SERIAL% --package com.onehamsa.underdogs --skip-controller-check > "%RD_LAUNCH_LOG%" 2>&1
 type "%RD_LAUNCH_LOG%"
 
-:: Parse the ident (integer after "ident") from the JSON. NOTE: if the JSON shape changes this parse may
-:: need adjusting - check renderdoc_launch.json in the test folder after a run.
+:: Extract the ident (the "ident": <number> field) from the JSON, robust to log noise and field order.
+:: Written to a paren-free temp file so the test folder's parentheses can't break for /f parsing.
 set "RD_IDENT="
-for /f "tokens=2 delims=:," %%a in ('findstr /i "ident" "%RD_LAUNCH_LOG%"') do (
-    if not defined RD_IDENT set "RD_IDENT=%%a"
-)
-set "RD_IDENT=%RD_IDENT: =%"
-set "RD_IDENT=%RD_IDENT:"=%"
+powershell -NoProfile -Command "$m=[regex]::Match((Get-Content -Raw '%RD_LAUNCH_LOG%'),([char]34+'ident'+[char]34+'\s*:\s*(\d+)')); if($m.Success){$m.Groups[1].Value}" > "%TEMP%\rd_ident.txt"
+set /p RD_IDENT=<"%TEMP%\rd_ident.txt"
 echo Parsed RenderDoc ident: "%RD_IDENT%"
 
 ping 127.0.0.1 -n 6 >nul
@@ -204,7 +205,7 @@ echo ...
 ping 127.0.0.1 -n 11 >nul
 
 if not defined RD_IDENT (
-    echo    WARNING: No RenderDoc ident parsed at launch - skipping capture. Check renderdoc_launch.json.
+    echo    WARNING: No RenderDoc ident parsed at launch - skipping capture. Check renderdoc_launch.json ^(likely not a development/debuggable build^).
 ) else (
     echo    Capturing frame with ident %RD_IDENT%...
     "%RENDERDOC_CMD%" adb-capture --device %SERIAL% --ident %RD_IDENT% --frames 1 --output-dir "%CURRENT_TEST_DIR%"
@@ -243,6 +244,18 @@ adb pull /sdcard/AUTOMATION_SCREENSHOT_2.png "%CURRENT_TEST_DIR%\SCREENSHOT_2.pn
 adb shell rm /sdcard/AUTOMATION_SCREENSHOT_2.png
 adb pull /sdcard/AUTOMATION_SCREENSHOT_3.png "%CURRENT_TEST_DIR%\SCREENSHOT_3.png"
 adb shell rm /sdcard/AUTOMATION_SCREENSHOT_3.png
+
+ping 127.0.0.1 -n 4 >nul
+
+:: Pull the game logs folder from the headset into "Report Logs" so we can inspect / parse the in-game
+:: run (spectator join, errors, etc.). Same source + fallback path the Bots runner uses.
+echo    Pulling game logs from headset...
+adb wait-for-device
+adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
+if errorlevel 1 (
+    echo Trying alternative path...
+    adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
+)
 
 ping 127.0.0.1 -n 4 >nul
 
