@@ -74,6 +74,11 @@ echo ...
 echo Setting up the headset for the test
 echo ...
 
+:: Restart the ADB daemon clean first, so no stale port-forward from a previous run
+:: can make the profiler connect to a dead endpoint (TCP connects but the handshake fails).
+adb kill-server >nul 2>&1
+ping 127.0.0.1 -n 3 >nul
+
 :: Ensure ADB daemon is running and device is connected before doing anything
 adb start-server >nul 2>&1
 echo Waiting for ADB device...
@@ -185,8 +190,7 @@ adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_1.png
 
 ping 127.0.0.1 -n 31 >nul
 
-echo starting the 20 second unity profiling recording to capture the CPU performance, while we do that we keep the adb connection alive every 2 seconds(this script freezes until the unity profiler finishes)
-
+echo starting the 20 second unity profiling recording to capture the CPU performance
 adb wait-for-device
 adb shell input keyevent KEYCODE_WAKEUP
 "C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
