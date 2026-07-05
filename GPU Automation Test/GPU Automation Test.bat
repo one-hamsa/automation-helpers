@@ -4,6 +4,9 @@ setlocal EnableDelayedExpansion
 :: --- CONFIGURATION START ---
 set "ROOT_DIR=E:\Automation\UNDERDOGS Scene Test Automation\Tests Data"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
+:: RenderDoc Meta fork (bundled with Quest Developer Hub). %APPDATA% resolves the current user's
+:: Roaming folder, so no username is hardcoded.
+set "RENDERDOC_CMD=%APPDATA%\odh\packages\tools\renderdoc-oculus\renderdoccmd.exe"
 :: --- CONFIGURATION END ---
 
 :: we assign the variable to the parameter passed
@@ -104,20 +107,36 @@ adb wait-for-device
 adb shell am start omms://app
 ping 127.0.0.1 -n 5 >nul
 
-:: ************************************************   2. LAUNCHING GAME   ************************************************
+:: ************************************************   2. LAUNCHING GAME (RenderDoc injection)   ************************************************
 echo ...
-echo [2/10] Launching Underdogs...
+echo [2/10] Launching Underdogs with RenderDoc injection...
 echo ...
 
 adb wait-for-device
-adb shell am start -n com.onehamsa.underdogs/com.unity3d.player.UnityPlayerActivity
+:: Grab the device serial for the later RenderDoc capture command.
+for /f "delims=" %%s in ('adb get-serialno') do set "SERIAL=%%s"
+echo Device serial: %SERIAL%
 
-::sometimes a few seconds after opening a menu pops up, so we focus on the app again
+:: RenderDoc on Quest can only capture an app it LAUNCHED itself (there is no attach-to-running), so we
+:: launch through renderdoccmd instead of "am start". The RenderDoc layer stays resident but idle during
+:: the OVR recording phase; the actual (heavy) capture happens later, after OVR is closed.
+:: --skip-controller-check allows launching on the headless rig. adb-launch prints JSON containing the
+:: "ident" we must feed to adb-capture; we tee it to a file and parse the number out.
+set "RD_LAUNCH_LOG=%CURRENT_TEST_DIR%\renderdoc_launch.json"
+"%RENDERDOC_CMD%" adb-launch --device %SERIAL% --package com.onehamsa.underdogs --skip-controller-check > "%RD_LAUNCH_LOG%" 2>&1
+type "%RD_LAUNCH_LOG%"
+
+:: Parse the ident (integer after "ident") from the JSON. NOTE: if the JSON shape changes this parse may
+:: need adjusting - check renderdoc_launch.json in the test folder after a run.
+set "RD_IDENT="
+for /f "tokens=2 delims=:," %%a in ('findstr /i "ident" "%RD_LAUNCH_LOG%"') do (
+    if not defined RD_IDENT set "RD_IDENT=%%a"
+)
+set "RD_IDENT=%RD_IDENT: =%"
+set "RD_IDENT=%RD_IDENT:"=%"
+echo Parsed RenderDoc ident: "%RD_IDENT%"
 
 ping 127.0.0.1 -n 6 >nul
-
-adb wait-for-device
-adb shell monkey -p com.onehamsa.underdogs -c android.intent.category.LAUNCHER 1
 
 :: ************************************************   3. WAITING FOR THE GAME TO LOAD   ************************************************
 echo ...
@@ -154,37 +173,57 @@ echo    Taking screenshot 1 from headset...
 adb wait-for-device
 adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_1.png
 
-ping 127.0.0.1 -n 61 >nul
+ping 127.0.0.1 -n 31 >nul
 
 echo    Taking screenshot 2 from headset...
 adb wait-for-device
 adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_2.png
 
-ping 127.0.0.1 -n 61 >nul
+ping 127.0.0.1 -n 31 >nul
 
 echo    Taking screenshot 3 from headset...
 adb wait-for-device
 adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_3.png
 
-:: ************************************************   6. STOPPING GAME   ************************************************
+:: ************************************************   6. CLOSING OVR METRICS   ************************************************
 echo ...
-echo [6/10] Stopping Game...
-echo ...
-
-adb wait-for-device
-adb shell am force-stop com.onehamsa.underdogs
-
-ping 127.0.0.1 -n 6 >nul
-
-:: ************************************************   7. CLOSING OVR METRICS   ************************************************
-echo ...
-echo [7/10] Closing OVR metrics tool ...
+echo [6/10] Closing OVR metrics tool (stops recording; game stays running for the RenderDoc capture)...
 echo ...
 
 adb wait-for-device
 adb shell am force-stop com.oculus.ovrmonitormetricsservice
 
 ping 127.0.0.1 -n 21 >nul
+
+:: ************************************************   7. RENDERDOC CAPTURE   ************************************************
+echo ...
+echo [7/10] Waiting 10s then capturing one frame with RenderDoc...
+echo ...
+
+:: 10s settle after OVR closes, so the capture (and its hitch) never touches the recorded metrics.
+ping 127.0.0.1 -n 11 >nul
+
+if not defined RD_IDENT (
+    echo    WARNING: No RenderDoc ident parsed at launch - skipping capture. Check renderdoc_launch.json.
+) else (
+    echo    Capturing frame with ident %RD_IDENT%...
+    "%RENDERDOC_CMD%" adb-capture --device %SERIAL% --ident %RD_IDENT% --frames 1 --output-dir "%CURRENT_TEST_DIR%"
+    :: Extract a PNG from the .rdc thumbnail so it uploads with the other images.
+    for %%R in ("%CURRENT_TEST_DIR%\*.rdc") do (
+        echo    Extracting PNG from %%~nxR...
+        "%RENDERDOC_CMD%" thumb --out "%CURRENT_TEST_DIR%\RENDERDOC_CAPTURE.png" "%%R"
+    )
+)
+
+:: ************************************************   8. STOPPING GAME   ************************************************
+echo ...
+echo [8/10] Stopping Game...
+echo ...
+
+adb wait-for-device
+adb shell am force-stop com.onehamsa.underdogs
+
+ping 127.0.0.1 -n 6 >nul
 
 :: ************************************************   9. DOWNLOADING THE CSV REPORT AND SCREENSHOT   ************************************************
 echo ...

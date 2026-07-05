@@ -167,7 +167,8 @@ def create_drive_folder(service, name, parent_id):
     return folder.get("id")
 
 
-def upload_file_drive(service, file_path, folder_id):
+def upload_file_drive(service, file_path, folder_id, max_retries=3):
+    import time
     from googleapiclient.http import MediaFileUpload
 
     file_name = os.path.basename(file_path)
@@ -177,10 +178,33 @@ def upload_file_drive(service, file_path, folder_id):
     mime_type = mime_map.get(os.path.splitext(file_name)[1].lower(), "application/octet-stream")
 
     metadata = {"name": file_name, "parents": [folder_id]}
-    media = MediaFileUpload(file_path, mimetype=mime_type, resumable=(file_size > 5 * 1024 * 1024))
 
-    uploaded = service.files().create(body=metadata, media_body=media, fields="id,webViewLink").execute()
-    return uploaded
+    # Resumable for anything over 5MB. Large files (e.g. the RenderDoc .rdc capture) are streamed in
+    # 50MB chunks so a single huge request can't time out, and we report progress as it uploads.
+    resumable = file_size > 5 * 1024 * 1024
+    chunksize = 50 * 1024 * 1024 if resumable else -1
+
+    for attempt in range(1, max_retries + 1):
+        media = MediaFileUpload(file_path, mimetype=mime_type, resumable=resumable, chunksize=chunksize)
+        request = service.files().create(body=metadata, media_body=media, fields="id,webViewLink")
+        try:
+            if resumable:
+                response = None
+                while response is None:
+                    status, response = request.next_chunk()
+                    if status:
+                        print(f"      ...{int(status.progress() * 100)}%")
+                return response
+            return request.execute()
+        except Exception as e:
+            error_str = str(e)
+            is_retryable = any(code in error_str for code in ("500", "502", "503", "429"))
+            if is_retryable and attempt < max_retries:
+                wait = 2 ** attempt
+                print(f"    Transient error (attempt {attempt}/{max_retries}), retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
 
 
 def upload_to_drive(test_dir, folderName):
@@ -193,7 +217,8 @@ def upload_to_drive(test_dir, folderName):
     folder_id = create_drive_folder(service, folderName, DRIVE_PARENT_FOLDER_ID)
     drive_folder_link = f"https://drive.google.com/drive/folders/{folder_id}"
 
-    extensions = ("*.csv", "*.png")
+    # .rdc is the RenderDoc capture — large, Drive-only (never goes to GitHub, like the profiler .raw).
+    extensions = ("*.csv", "*.png", "*.rdc")
     files_to_upload = []
     for ext in extensions:
         files_to_upload.extend(glob.glob(os.path.join(test_dir, ext)))
