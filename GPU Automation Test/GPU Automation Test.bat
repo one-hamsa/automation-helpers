@@ -255,9 +255,9 @@ powershell -NoProfile -Command "$m=[regex]::Match((Get-Content -Raw '%RD_LAUNCH_
 set /p RD_IDENT=<"%TEMP%\rd_ident.txt"
 echo Parsed RenderDoc ident: "%RD_IDENT%"
 
-:: Wait three minutes for the scene to render, then capture one frame. RenderDoc's capture-layer injection
+:: Wait four minutes for the scene to render, then capture one frame. RenderDoc's capture-layer injection
 :: makes startup slower than the metrics run, so shorter waits land on the "Connecting" screen.
-ping 127.0.0.1 -n 181 >nul
+ping 127.0.0.1 -n 241 >nul
 
 if not defined RD_IDENT (
     echo    WARNING: No RenderDoc ident parsed at launch - skipping capture. Check renderdoc_launch.json ^(likely not a development/debuggable build^).
@@ -270,6 +270,16 @@ if not defined RD_IDENT (
 adb wait-for-device
 adb shell am force-stop com.onehamsa.underdogs
 ping 127.0.0.1 -n 6 >nul
+
+:: Pull the RenderDoc-phase game logs too. The step-6 pull happened BEFORE this relaunch, so it only has the
+:: metrics phase; without this we can't see why the RenderDoc capture landed on "Connecting" vs in-scene.
+:: Separate folder so it doesn't collide with the metrics-phase "Report Logs".
+adb wait-for-device
+adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs RenderDoc"
+if errorlevel 1 (
+    echo Trying alternative path...
+    adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs RenderDoc"
+)
 
 :: ************************************************   8. GENERATE GRAPH AND UPLOAD FILES   ************************************************
 echo ...
