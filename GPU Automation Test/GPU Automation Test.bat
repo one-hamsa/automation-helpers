@@ -212,15 +212,16 @@ adb shell rm /sdcard/AUTOMATION_SCREENSHOT_3.png
 ping 127.0.0.1 -n 4 >nul
 
 :: --- Game logs ---
-:: Create the destination first and pull the folder CONTENTS ("/Logs/.") so adb doesn't trip over the
-:: destination path. The /sdcard path is the accessible one; the /data/user fallback needs root (usually denied).
+:: Pull the whole Logs folder into a NON-existent "Report Logs" so adb renames it to the destination
+:: (contents land directly in "Report Logs\<session>\Global.json.log"). Pre-creating the dir or appending
+:: "/." makes newer/RenderDoc-forked adb pull nothing. The /sdcard path is the accessible one; the
+:: /data/user fallback needs root (usually denied).
 echo    Pulling game logs from headset...
 adb wait-for-device
-if not exist "%CURRENT_TEST_DIR%\Report Logs" mkdir "%CURRENT_TEST_DIR%\Report Logs"
-adb pull "/sdcard/Android/data/com.onehamsa.underdogs/files/Logs/." "%CURRENT_TEST_DIR%\Report Logs"
+adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
 if errorlevel 1 (
     echo Trying alternative path...
-    adb pull "/data/user/0/com.onehamsa.underdogs/files/Logs/." "%CURRENT_TEST_DIR%\Report Logs"
+    adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
 )
 
 ping 127.0.0.1 -n 4 >nul
