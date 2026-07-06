@@ -255,8 +255,9 @@ powershell -NoProfile -Command "$m=[regex]::Match((Get-Content -Raw '%RD_LAUNCH_
 set /p RD_IDENT=<"%TEMP%\rd_ident.txt"
 echo Parsed RenderDoc ident: "%RD_IDENT%"
 
-:: Wait a minute for the scene to render, then capture one frame.
-ping 127.0.0.1 -n 61 >nul
+:: Wait two minutes for the scene to render, then capture one frame. RenderDoc's capture-layer injection
+:: makes startup slower than the metrics run, so one minute lands on the "Connecting" screen.
+ping 127.0.0.1 -n 121 >nul
 
 if not defined RD_IDENT (
     echo    WARNING: No RenderDoc ident parsed at launch - skipping capture. Check renderdoc_launch.json ^(likely not a development/debuggable build^).
