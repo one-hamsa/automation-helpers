@@ -255,9 +255,16 @@ powershell -NoProfile -Command "$m=[regex]::Match((Get-Content -Raw '%RD_LAUNCH_
 set /p RD_IDENT=<"%TEMP%\rd_ident.txt"
 echo Parsed RenderDoc ident: "%RD_IDENT%"
 
-:: Wait four minutes for the scene to render, then capture one frame. RenderDoc's capture-layer injection
-:: makes startup slower than the metrics run, so shorter waits land on the "Connecting" screen.
-ping 127.0.0.1 -n 241 >nul
+:: Keep the headset "worn"/awake for the WHOLE wait + capture. renderdoccmd's own prox_close lasts only
+:: ~30s; once it expires during the long wait the app loses VR focus and PauseMenu opens (a spectator can't
+:: auto-unpause, so the pause then sticks into the capture). A long-duration prox_close prevents that.
+adb shell input keyevent KEYCODE_WAKEUP
+adb shell am broadcast -a com.oculus.vrpowermanager.prox_close --ei duration 300000
+
+:: Wait one minute for the scene to render, then capture one frame. With the debug scene-loader no longer
+:: loading Joint a second time (skipLoad for MP), the spectator brings the scene up quickly, so a short wait
+:: is enough now (earlier long waits were compensating for the double-load stall, not RenderDoc slowness).
+ping 127.0.0.1 -n 61 >nul
 
 if not defined RD_IDENT (
     echo    WARNING: No RenderDoc ident parsed at launch - skipping capture. Check renderdoc_launch.json ^(likely not a development/debuggable build^).
