@@ -193,6 +193,15 @@ ping 127.0.0.1 -n 31 >nul
 echo starting the 20 second unity profiling recording to capture the CPU performance
 adb wait-for-device
 adb shell input keyevent KEYCODE_WAKEUP
+
+:: The Unity editor decides which app to profile by asking the device for the LAST RESUMED
+:: activity (adb shell dumpsys activity top) and forwarding to localabstract:Unity-<that package>.
+:: If a system panel/dialog resumed after the game (or the WAKEUP above resumed the shell),
+:: Unity forwards to the wrong package and the profiler handshake fails for the whole run.
+:: Re-focus the game so it is the last resumed activity, then give the OS a moment to settle.
+adb shell monkey -p com.onehamsa.underdogs -c android.intent.category.LAUNCHER 1
+ping 127.0.0.1 -n 4 >nul
+
 "C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
 
 ping 127.0.0.1 -n 3 >nul
