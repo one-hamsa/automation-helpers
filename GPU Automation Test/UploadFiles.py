@@ -371,12 +371,11 @@ def _parse_folder_name(folder_name):
     return test_name, scene_name, timestamp
 
 
-def _github_update_summary(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown"):
-    """Upload a metadata.json file into the test's folder."""
+def _build_metadata(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown"):
     test_name, scene_name, timestamp = _parse_folder_name(folder_name)
 
     entry = {
-        "avg_gpu": f"{avg_gpu:.0f}",
+        "avg_gpu": f"{avg_gpu:.0f}" if avg_gpu is not None else "N/A",
         "test_name": test_name,
         "scene_name": scene_name,
         "timestamp": timestamp,
@@ -386,6 +385,21 @@ def _github_update_summary(folder_name, avg_gpu, drive_link=None, has_thumbnail=
     }
     if drive_link:
         entry["drive_link"] = drive_link
+    return entry
+
+
+def _save_local_metadata(test_dir, folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown"):
+    """Write metadata.json into the test folder on disk so it's readable offline."""
+    entry = _build_metadata(folder_name, avg_gpu, drive_link, has_thumbnail, started_by)
+    local_path = os.path.join(test_dir, "metadata.json")
+    with open(local_path, "w", encoding="utf-8") as f:
+        json.dump(entry, f, indent=2)
+    print(f"  Saved local metadata: {local_path}")
+
+
+def _github_update_summary(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown"):
+    """Upload a metadata.json file into the test's folder."""
+    entry = _build_metadata(folder_name, avg_gpu, drive_link, has_thumbnail, started_by)
 
     content = json.dumps(entry, indent=2)
     repo_path = f"AllTestRuns/{folder_name}/metadata.json"
@@ -401,7 +415,8 @@ def _github_update_summary(folder_name, avg_gpu, drive_link=None, has_thumbnail=
 
     r = requests.put(f"{GITHUB_API_BASE}/{repo_path}", headers=GITHUB_HEADERS, json=payload)
     r.raise_for_status()
-    print(f"  GitHub: Metadata uploaded — {folder_name} avg GPU: {avg_gpu:.0f}")
+    gpu_str = f"{avg_gpu:.0f}" if avg_gpu is not None else "N/A"
+    print(f"  GitHub: Metadata uploaded — {folder_name} avg GPU: {gpu_str}")
 
 
 def upload_to_github(test_dir, folderName, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown"):
@@ -429,9 +444,18 @@ def upload_to_github(test_dir, folderName, avg_gpu, drive_link=None, has_thumbna
             print(f"  WARNING: Failed to upload {filename}: {e}")
             failed.append(filename)
 
+    # Always write metadata so the run shows up on the dashboard even when a
+    # metric is missing (e.g. record-metrics wasn't enabled, so avg_gpu is None).
+    # Whatever we do have — test name, scene, timestamp — gets recorded; the
+    # missing metric is left at its default ("N/A").
     try:
-        if avg_gpu is not None:
-            _github_update_summary(folderName, avg_gpu, drive_link, has_thumbnail, started_by)
+        # Save locally first so the metadata lives alongside the run data
+        # on disk even if the GitHub upload fails.
+        try:
+            _save_local_metadata(test_dir, folderName, avg_gpu, drive_link, has_thumbnail, started_by)
+        except Exception as e:
+            print(f"  WARNING: Failed to save local metadata.json: {e}")
+        _github_update_summary(folderName, avg_gpu, drive_link, has_thumbnail, started_by)
     except Exception as e:
         print(f"  WARNING: Failed to update summary: {e}")
         failed.append("summary.json")

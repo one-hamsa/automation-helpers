@@ -481,7 +481,7 @@ def _read_log_stats(test_dir):
 def _build_metadata(folder_name, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     test_name, timestamp = _parse_folder_name(folder_name)
     entry = {
-        "avg_fps": f"{avg_fps:.0f}",
+        "avg_fps": f"{avg_fps:.0f}" if avg_fps is not None else "N/A",
         "test_name": test_name,
         "timestamp": timestamp,
         "has_thumbnail": has_thumbnail,
@@ -521,7 +521,8 @@ def _github_update_summary(folder_name, avg_fps, drive_link=None, has_thumbnail=
 
     r = requests.put(f"{GITHUB_API_BASE}/{repo_path}", headers=GITHUB_HEADERS, json=payload)
     r.raise_for_status()
-    print(f"  GitHub: Metadata uploaded — {folder_name} avg fps: {avg_fps:.0f}")
+    fps_str = f"{avg_fps:.0f}" if avg_fps is not None else "N/A"
+    print(f"  GitHub: Metadata uploaded — {folder_name} avg fps: {fps_str}")
 
 
 def upload_to_github(test_dir, folderName, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
@@ -568,15 +569,18 @@ def upload_to_github(test_dir, folderName, avg_fps, drive_link=None, has_thumbna
         if log_file_count > 0:
             print(f"  Uploaded {log_file_count} log file(s) to GitHub Pages.")
 
+    # Always write metadata so the run shows up on the dashboard even when a
+    # metric is missing (e.g. record-metrics wasn't enabled, so avg_fps is None).
+    # Whatever we do have — test name, timestamp, bot counts, errors, commit —
+    # gets recorded; the missing metric is left at its default ("N/A").
     try:
-        if avg_fps is not None:
-            # Save locally first so the metadata lives alongside the run data
-            # on disk even if the GitHub upload fails.
-            try:
-                _save_local_metadata(test_dir, folderName, avg_fps, drive_link, has_thumbnail, started_by, extra)
-            except Exception as e:
-                print(f"  WARNING: Failed to save local metadata.json: {e}")
-            _github_update_summary(folderName, avg_fps, drive_link, has_thumbnail, started_by, extra)
+        # Save locally first so the metadata lives alongside the run data
+        # on disk even if the GitHub upload fails.
+        try:
+            _save_local_metadata(test_dir, folderName, avg_fps, drive_link, has_thumbnail, started_by, extra)
+        except Exception as e:
+            print(f"  WARNING: Failed to save local metadata.json: {e}")
+        _github_update_summary(folderName, avg_fps, drive_link, has_thumbnail, started_by, extra)
     except Exception as e:
         print(f"  WARNING: Failed to update summary: {e}")
         failed.append("summary.json")
