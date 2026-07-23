@@ -1,0 +1,13 @@
+# Unity per-machine caches and IDE files — only Assets/Packages/ProjectSettings are versioned.
+/Library/
+/Temp/
+/Logs/
+/obj/
+/UserSettings/
+/MemoryCaptures/
+/.vs/
+/.idea/
+*.csproj
+*.sln
+.vsconfig
+editor_log.txt

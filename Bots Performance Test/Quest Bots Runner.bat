@@ -207,30 +207,37 @@ adb shell input keyevent KEYCODE_WAKEUP
 adb shell monkey -p com.onehamsa.underdogs -c android.intent.category.LAUNCHER 1
 ping 127.0.0.1 -n 4 >nul
 
-:: OPTIONAL (RECORD_VIDEO=1): record gameplay video covering the whole Unity profiler
-:: window, using the Quest's NATIVE capture (single eye, undistorted — same as the
-:: in-headset Record button; adb screenrecord would give the raw dual-eye distorted
-:: compositor output). The in-game frame-stamp overlay (FrameStampOverlay, forced on
-:: in bot builds) burns Time.frameCount into every frame, so this video can be joined
-:: frame-exactly to the profiler capture with Analysis\video_framestamp_decode.py —
-:: the video does not need to start/stop in sync with the profiler, just overlap it.
-if not "!RECORD_VIDEO!"=="1" goto skip_video_start
-echo starting gameplay video recording on the headset (native capture)
+:: OPTIONAL (RECORD_VIDEO=1): gameplay video via the Quest's NATIVE capture (single eye,
+:: undistorted — same as the in-headset Record button; adb screenrecord would give the
+:: raw dual-eye distorted compositor output). AutoProfiler starts/stops the capture so
+:: the video sits strictly INSIDE the profiler window — every video frame's stamp (fc,
+:: burned in by FrameStampOverlay, forced on in bot builds) is guaranteed to exist in
+:: the profiler capture. Join them with Analysis\video_framestamp_decode.py.
+:: Here we only set the capture config and pass the flag down (BOT_RECORD_VIDEO env).
+if not "!RECORD_VIDEO!"=="1" goto skip_video_config
+echo configuring headset native video capture
 adb shell setprop debug.oculus.screenCaptureEye 0
 adb shell setprop debug.oculus.capture.width 1024
 adb shell setprop debug.oculus.capture.height 1024
 adb shell setprop debug.oculus.capture.bitrate 8000000
-adb shell setprop debug.oculus.enableVideoCapture 1
-ping 127.0.0.1 -n 3 >nul
-:skip_video_start
+set "BOT_RECORD_VIDEO=!RECORD_VIDEO!"
+:skip_video_config
+
+:: Sync the versioned Profiler-Project source over the rig-local copy (the repo is the
+:: source of truth; E:\ keeps its warm Library so the editor still starts fast).
+if not exist "%~dp0..\Profiler-Project\Assets" goto skip_profiler_sync
+echo syncing Profiler-Project source from the repo checkout
+robocopy "%~dp0..\Profiler-Project\Assets" "E:\Automation\Profiler-Project\Assets" /MIR /NFL /NDL /NJH /NJS /NP
+robocopy "%~dp0..\Profiler-Project\Packages" "E:\Automation\Profiler-Project\Packages" /MIR /NFL /NDL /NJH /NJS /NP
+robocopy "%~dp0..\Profiler-Project\ProjectSettings" "E:\Automation\Profiler-Project\ProjectSettings" /MIR /NFL /NDL /NJH /NJS /NP
+:skip_profiler_sync
 
 "C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
 
-:: give the native recorder a few seconds to finalize the mp4 before we pull it later
+:: safety only — AutoProfiler already stopped the capture inside the profiler window
 if not "!RECORD_VIDEO!"=="1" goto skip_video_stop
-echo stopping gameplay video recording
 adb shell setprop debug.oculus.enableVideoCapture 0
-ping 127.0.0.1 -n 6 >nul
+ping 127.0.0.1 -n 3 >nul
 :skip_video_stop
 
 echo    Taking screenshot 2 from headset...
