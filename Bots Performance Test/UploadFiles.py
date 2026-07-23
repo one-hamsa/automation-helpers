@@ -269,7 +269,7 @@ def upload_to_drive(test_dir, folderName):
     drive_folder_link = f"https://drive.google.com/drive/folders/{folder_id}"
 
     # .raw is the profiler recording — large, Drive-only (never goes to GitHub).
-    extensions = ("*.csv", "*.png", "*.raw")
+    extensions = ("*.csv", "*.png", "*.raw", "*.mp4")
     files_to_upload = []
     for ext in extensions:
         files_to_upload.extend(glob.glob(os.path.join(test_dir, ext)))

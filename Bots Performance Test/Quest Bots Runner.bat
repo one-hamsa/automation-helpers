@@ -37,6 +37,11 @@ if defined BOT_NUM_PC_BOTS (
 :: Commit/branch the build was made from (set by Run Both Tests.bat; empty if standalone).
 if defined BOT_COMMIT_SHA (set "COMMIT_SHA=!BOT_COMMIT_SHA!") else (set "COMMIT_SHA=")
 if defined BOT_COMMIT_REF (set "COMMIT_REF=!BOT_COMMIT_REF!") else (set "COMMIT_REF=")
+
+:: Optional frame-stamped gameplay video (set by Run Both Tests.bat, or arg 3 standalone). OFF by default.
+if defined BOT_RECORD_VIDEO (set "RECORD_VIDEO=!BOT_RECORD_VIDEO!") else (set "RECORD_VIDEO=%~3")
+if not "!RECORD_VIDEO!"=="1" set "RECORD_VIDEO=0"
+echo Record gameplay video: "!RECORD_VIDEO!"
 echo The parameter we received is: "!DRIVE_FOLDER_NAME!"
 echo Test started by: "!STARTED_BY!"
 echo Number of PC bots requested: "!NUM_PC_BOTS!"
@@ -202,9 +207,27 @@ adb shell input keyevent KEYCODE_WAKEUP
 adb shell monkey -p com.onehamsa.underdogs -c android.intent.category.LAUNCHER 1
 ping 127.0.0.1 -n 4 >nul
 
+:: OPTIONAL (RECORD_VIDEO=1): record gameplay video covering the whole Unity profiler
+:: window. The in-game frame-stamp overlay (FrameStampOverlay, forced on in bot builds)
+:: burns Time.frameCount into every frame, so this video can be joined frame-exactly
+:: to the profiler capture with Analysis\video_framestamp_decode.py — the video
+:: does not need to start/stop in sync with the profiler, just overlap it.
+:: --time-limit 180 is screenrecord's max; it self-stops if we never kill it.
+if not "!RECORD_VIDEO!"=="1" goto skip_video_start
+echo starting gameplay video recording on the headset
+adb shell rm -f /sdcard/AUTOMATION_VIDEO.mp4
+start /B "" adb shell screenrecord --size 1024x1024 --bit-rate 8000000 --time-limit 180 /sdcard/AUTOMATION_VIDEO.mp4
+ping 127.0.0.1 -n 3 >nul
+:skip_video_start
+
 "C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
 
-ping 127.0.0.1 -n 3 >nul
+:: SIGINT lets screenrecord finalize the mp4 (a hard kill corrupts it)
+if not "!RECORD_VIDEO!"=="1" goto skip_video_stop
+echo stopping gameplay video recording
+adb shell "kill -2 $(pidof screenrecord)" 2>nul
+ping 127.0.0.1 -n 4 >nul
+:skip_video_stop
 
 echo    Taking screenshot 2 from headset...
 adb wait-for-device
@@ -255,6 +278,18 @@ if "%LATEST_FILE%"=="" (
 ) else (
     echo    Found: %LATEST_FILE%
 adb pull "%REMOTE_PATH%/%LATEST_FILE%" "%CURRENT_TEST_DIR%\CSV_REPORT.csv")
+
+:: Download the gameplay video (frame-stamped, syncs to the profiler capture), then delete it
+if not "!RECORD_VIDEO!"=="1" goto skip_video_pull
+echo    Downloading gameplay video...
+adb wait-for-device
+adb pull /sdcard/AUTOMATION_VIDEO.mp4 "%CURRENT_TEST_DIR%\GAMEPLAY_VIDEO.mp4"
+if errorlevel 1 (
+    echo    WARNING: No gameplay video found on the headset!
+) else (
+    adb shell rm /sdcard/AUTOMATION_VIDEO.mp4
+)
+:skip_video_pull
 
 :: Download the screenshots from the headset, then delete them
 echo    Downloading screenshots...
