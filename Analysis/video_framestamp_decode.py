@@ -8,6 +8,11 @@ video moment to profiler frame (and back).
 Usage:
     python video_framestamp_decode.py capture.mp4 [--roi X,Y,W,H] [--out map.csv]
     python video_framestamp_decode.py capture.mp4 --roi ... --lookup 123456
+    python video_framestamp_decode.py capture.mp4 --roi ... --profiler-json profile_dump.json
+
+--profiler-json verifies containment: every fc decoded from the video must exist in the
+profiler dump's per-frame "fc" field (produced by profiler-dump from the run's .raw).
+Exits non-zero if any video frame has no matching profiler frame.
 
 Without --roi an interactive picker opens on the first frame: drag a rectangle
 tightly around the stamp quad (all three bands), press ENTER.
@@ -24,6 +29,7 @@ Stamp layout (must match Assets/Resources/Debug/Shaders/FrameStamp.shader):
 
 import argparse
 import csv
+import json
 import sys
 
 import cv2
@@ -90,6 +96,8 @@ def main():
     ap.add_argument("--out", help="output CSV path (default: <video>.framemap.csv)")
     ap.add_argument("--lookup", type=int, metavar="APP_FRAME",
                     help="just print the video timestamp(s) showing this app frame")
+    ap.add_argument("--profiler-json", metavar="DUMP_JSON",
+                    help="profiler-dump JSON; verify every decoded video fc exists in the capture")
     args = ap.parse_args()
 
     if args.roi:
@@ -147,6 +155,20 @@ def main():
         print(f"app frames {decoded[0]}..{decoded[-1]} ({span} frames over {rows[-1][1]:.1f}s"
               f" -> avg {span / max(rows[-1][1], 1e-6):.1f} app fps)")
     print(f"wrote {out_path}")
+
+    if args.profiler_json:
+        with open(args.profiler_json) as f:
+            dump = json.load(f)
+        profiler_fcs = {fr["fc"] for fr in dump["frames"] if fr.get("fc", -1) >= 0}
+        if not profiler_fcs:
+            sys.exit("CONTAINMENT FAILED: profiler dump has no fc metadata (stamp was off during the capture)")
+        missing = sorted({fc for fc in decoded if fc not in profiler_fcs})
+        if missing:
+            sys.exit(f"CONTAINMENT FAILED: {len(missing)} video fc values have no profiler frame"
+                     f" (video fc {decoded[0]}..{decoded[-1]}, profiler fc {min(profiler_fcs)}..{max(profiler_fcs)},"
+                     f" first missing: {missing[:5]})")
+        print(f"containment OK: all {len(set(decoded))} decoded fc values exist in the profiler capture"
+              f" (profiler fc {min(profiler_fcs)}..{max(profiler_fcs)})")
 
 
 if __name__ == "__main__":
