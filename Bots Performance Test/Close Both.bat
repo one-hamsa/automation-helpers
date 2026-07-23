@@ -52,6 +52,7 @@ if errorlevel 1 (
     adb shell setprop debug.oculus.foveation.dynamic 1
     adb shell setprop debug.oculus.foveation.level -1
     adb shell setprop debug.vr.gpuprofilingservice 0
+    adb shell setprop debug.oculus.enableVideoCapture 0
     adb shell setprop debug.oculus.guardian_pause 0
     adb shell am broadcast -a com.oculus.vrpowermanager.automation_disable
     adb shell input keyevent KEYCODE_SLEEP

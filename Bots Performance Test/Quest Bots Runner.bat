@@ -208,25 +208,29 @@ adb shell monkey -p com.onehamsa.underdogs -c android.intent.category.LAUNCHER 1
 ping 127.0.0.1 -n 4 >nul
 
 :: OPTIONAL (RECORD_VIDEO=1): record gameplay video covering the whole Unity profiler
-:: window. The in-game frame-stamp overlay (FrameStampOverlay, forced on in bot builds)
-:: burns Time.frameCount into every frame, so this video can be joined frame-exactly
-:: to the profiler capture with Analysis\video_framestamp_decode.py — the video
-:: does not need to start/stop in sync with the profiler, just overlap it.
-:: --time-limit 180 is screenrecord's max; it self-stops if we never kill it.
+:: window, using the Quest's NATIVE capture (single eye, undistorted — same as the
+:: in-headset Record button; adb screenrecord would give the raw dual-eye distorted
+:: compositor output). The in-game frame-stamp overlay (FrameStampOverlay, forced on
+:: in bot builds) burns Time.frameCount into every frame, so this video can be joined
+:: frame-exactly to the profiler capture with Analysis\video_framestamp_decode.py —
+:: the video does not need to start/stop in sync with the profiler, just overlap it.
 if not "!RECORD_VIDEO!"=="1" goto skip_video_start
-echo starting gameplay video recording on the headset
-adb shell rm -f /sdcard/AUTOMATION_VIDEO.mp4
-start /B "" adb shell screenrecord --size 1024x1024 --bit-rate 8000000 --time-limit 180 /sdcard/AUTOMATION_VIDEO.mp4
+echo starting gameplay video recording on the headset (native capture)
+adb shell setprop debug.oculus.screenCaptureEye 0
+adb shell setprop debug.oculus.capture.width 1024
+adb shell setprop debug.oculus.capture.height 1024
+adb shell setprop debug.oculus.capture.bitrate 8000000
+adb shell setprop debug.oculus.enableVideoCapture 1
 ping 127.0.0.1 -n 3 >nul
 :skip_video_start
 
 "C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
 
-:: SIGINT lets screenrecord finalize the mp4 (a hard kill corrupts it)
+:: give the native recorder a few seconds to finalize the mp4 before we pull it later
 if not "!RECORD_VIDEO!"=="1" goto skip_video_stop
 echo stopping gameplay video recording
-adb shell "kill -2 $(pidof screenrecord)" 2>nul
-ping 127.0.0.1 -n 4 >nul
+adb shell setprop debug.oculus.enableVideoCapture 0
+ping 127.0.0.1 -n 6 >nul
 :skip_video_stop
 
 echo    Taking screenshot 2 from headset...
@@ -279,15 +283,19 @@ if "%LATEST_FILE%"=="" (
     echo    Found: %LATEST_FILE%
 adb pull "%REMOTE_PATH%/%LATEST_FILE%" "%CURRENT_TEST_DIR%\CSV_REPORT.csv")
 
-:: Download the gameplay video (frame-stamped, syncs to the profiler capture), then delete it
+:: Download the gameplay video (frame-stamped, syncs to the profiler capture), then delete it.
+:: The native recorder writes a timestamp-named file to VideoShots — grab the newest one.
 if not "!RECORD_VIDEO!"=="1" goto skip_video_pull
 echo    Downloading gameplay video...
 adb wait-for-device
-adb pull /sdcard/AUTOMATION_VIDEO.mp4 "%CURRENT_TEST_DIR%\GAMEPLAY_VIDEO.mp4"
-if errorlevel 1 (
+set "LATEST_VIDEO="
+for /f "delims=" %%F in ('adb shell "ls -t /sdcard/Oculus/VideoShots | head -n 1"') do set "LATEST_VIDEO=%%F"
+if "!LATEST_VIDEO!"=="" (
     echo    WARNING: No gameplay video found on the headset!
 ) else (
-    adb shell rm /sdcard/AUTOMATION_VIDEO.mp4
+    echo    Found: !LATEST_VIDEO!
+    adb pull "/sdcard/Oculus/VideoShots/!LATEST_VIDEO!" "%CURRENT_TEST_DIR%\GAMEPLAY_VIDEO.mp4"
+    adb shell rm "/sdcard/Oculus/VideoShots/!LATEST_VIDEO!"
 )
 :skip_video_pull
 
