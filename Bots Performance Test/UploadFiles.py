@@ -28,6 +28,8 @@ import requests
 PARSERS_DIR = Path(__file__).resolve().parent.parent / "Analysis"
 LOG_PARSER = PARSERS_DIR / "log_parser.py"
 PROFILER_PARSER = PARSERS_DIR / "profiler_parser.py"
+TAIL_REPORT = PARSERS_DIR / "tail_report.py"
+SIMPLEPERF_REPORT = PARSERS_DIR / "simpleperf_report.py"
 
 
 def run_parsers(test_dir, profiler_raw_path):
@@ -70,6 +72,39 @@ def run_parsers(test_dir, profiler_raw_path):
         )
     except Exception as e:
         print(f"[PARSE] profiler_parser crashed: {e}")
+
+    # Tail-vs-median attribution — writes TAIL_REPORT.csv next to the .raw.
+    # Answers "which systems drive the slow frames" (p90/p95), which the aggregated
+    # profiler_parser dump cannot: it excludes wait/idle time and one-off stall frames
+    # so the tail band reflects real, recurring spike cost.
+    if not TAIL_REPORT.is_file():
+        print(f"[PARSE] tail_report.py not found at {TAIL_REPORT}, skipping tail report.")
+    else:
+        print(f"[PARSE] Running tail_report on {profiler_raw_path}")
+        try:
+            subprocess.run(
+                [py, str(TAIL_REPORT), profiler_raw_path],
+                check=False,
+            )
+        except Exception as e:
+            print(f"[PARSE] tail_report crashed: {e}")
+
+    # simpleperf native-sampling report — writes SIMPLEPERF_REPORT.csv next to perf.data.
+    # perf.data only exists when the .bat capture step ran (simpleperf scripts vendored);
+    # absent otherwise, so this is skipped on runs without the native capture.
+    # simpleperf_report.py itself exits 0 if the report lib isn't vendored or perf.data is
+    # empty, so this never fails the run. Tier-0 (per-DSO) needs no symbols; pass --symfs
+    # a binary_cache dir for Tier-1 function names (see SIMPLEPERF_SETUP.md).
+    perf_data = os.path.join(test_dir, "perf.data")
+    if os.path.isfile(perf_data) and SIMPLEPERF_REPORT.is_file():
+        print(f"[PARSE] Running simpleperf_report on {perf_data}")
+        try:
+            subprocess.run(
+                [py, str(SIMPLEPERF_REPORT), perf_data],
+                check=False,
+            )
+        except Exception as e:
+            print(f"[PARSE] simpleperf_report crashed: {e}")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -268,8 +303,9 @@ def upload_to_drive(test_dir, folderName):
     folder_id = create_drive_folder(service, folderName, DRIVE_PARENT_FOLDER_ID)
     drive_folder_link = f"https://drive.google.com/drive/folders/{folder_id}"
 
-    # .raw is the profiler recording — large, Drive-only (never goes to GitHub).
-    extensions = ("*.csv", "*.png", "*.raw", "*.mp4")
+    # .raw is the profiler recording, perf.data the simpleperf native capture — both
+    # large, Drive-only (never go to GitHub). Kept for offline symbolized re-analysis.
+    extensions = ("*.csv", "*.png", "*.raw", "*.mp4", "perf.data")
     files_to_upload = []
     for ext in extensions:
         files_to_upload.extend(glob.glob(os.path.join(test_dir, ext)))

@@ -245,7 +245,19 @@ adb wait-for-device
 adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_2.png
 
 
-ping 127.0.0.1 -n 31 >nul
+:: ---- simpleperf native sampling capture (native CPU hotspots; see Analysis\SIMPLEPERF_SETUP.md) ----
+:: Sequenced AFTER the Unity profiler recording so sampling overhead never contaminates the .raw.
+:: The ~20s capture fills the idle window before screenshot 3. Guarded: if the vendored simpleperf
+:: scripts aren't present it falls back to the original 30s idle, so this never breaks the run.
+set "SIMPLEPERF_APP=%~dp0..\Analysis\simpleperf\app_profiler.py"
+if exist "%SIMPLEPERF_APP%" (
+    echo    Capturing simpleperf native profile...
+    adb wait-for-device
+    python "%SIMPLEPERF_APP%" -p com.onehamsa.underdogs -r "-e cpu-cycles -f 1000 -g --duration 20" --disable_adb_root -o "%CURRENT_TEST_DIR%\perf.data"
+) else (
+    echo    simpleperf scripts not vendored ^(Analysis\simpleperf\^) - skipping native capture, idling instead.
+    ping 127.0.0.1 -n 31 >nul
+)
 
 echo    Taking screenshot 3 from headset...
 adb wait-for-device
