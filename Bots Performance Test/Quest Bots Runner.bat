@@ -226,15 +226,8 @@ adb shell setprop debug.oculus.capture.bitrate 8000000
 set "BOT_RECORD_VIDEO=!RECORD_VIDEO!"
 :skip_video_config
 
-:: Sync the versioned Profiler-Project source over the rig-local copy (the repo is the
-:: source of truth; E:\ keeps its warm Library so the editor still starts fast).
-if not exist "%~dp0..\Profiler-Project\Assets" goto skip_profiler_sync
-echo syncing Profiler-Project source from the repo checkout
-robocopy "%~dp0..\Profiler-Project\Assets" "E:\Automation\Profiler-Project\Assets" /MIR /NFL /NDL /NJH /NJS /NP
-robocopy "%~dp0..\Profiler-Project\Packages" "E:\Automation\Profiler-Project\Packages" /MIR /NFL /NDL /NJH /NJS /NP
-robocopy "%~dp0..\Profiler-Project\ProjectSettings" "E:\Automation\Profiler-Project\ProjectSettings" /MIR /NFL /NDL /NJH /NJS /NP
-:skip_profiler_sync
-
+:: The rig-local Profiler-Project at E:\Automation is synced from the repo checkout by the
+:: "Sync Profiler-Project to the rig" step in Bots_Automation_Runner.yaml, before this bat runs.
 "C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
 
 :: safety only — AutoProfiler already stopped the capture inside the profiler window
