@@ -42,7 +42,7 @@ if defined BOT_COMMIT_REF (set "COMMIT_REF=!BOT_COMMIT_REF!") else (set "COMMIT_
 if defined BOT_RECORD_VIDEO (set "RECORD_VIDEO=!BOT_RECORD_VIDEO!") else (set "RECORD_VIDEO=%~3")
 if not "!RECORD_VIDEO!"=="1" set "RECORD_VIDEO=0"
 echo Record gameplay video: "!RECORD_VIDEO!"
-echo The parameter we received is: "!DRIVE_FOLDER_NAME!"
+echo Folder name is: "!DRIVE_FOLDER_NAME!"
 echo Test started by: "!STARTED_BY!"
 echo Number of PC bots requested: "!NUM_PC_BOTS!"
 echo Build commit: "!COMMIT_SHA!" ref: "!COMMIT_REF!"
@@ -104,6 +104,9 @@ adb shell input keyevent KEYCODE_WAKEUP
 adb shell am broadcast -a com.oculus.vrpowermanager.prox_close
 adb shell setprop debug.oculus.guardian_pause 1
 
+:: disable notifications and enable 'do not disturb' mode to make sure the navigation popup won't appear
+adb shell settings put global heads_up_notifications_enabled 0
+adb shell settings put global zen_mode 1
 
 ::wait 10 seconds to let the headset fully load
 ping 127.0.0.1 -n 11 >nul
