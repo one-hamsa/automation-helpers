@@ -137,6 +137,61 @@ GITHUB_HEADERS = {
 # ---------------------------------------------------------------------------
 # Graph generation
 # ---------------------------------------------------------------------------
+def read_metric_series(test_dir, column):
+    """Read one OVR metrics column from the run's CSV.
+
+    Returns (times_sec, values) for samples after the 60s game-load window,
+    or (None, None) if the CSV or the column has no usable data.
+    """
+    csv_pattern = os.path.join(test_dir, "CSV_REPORT*.csv")
+    csv_files = glob.glob(csv_pattern)
+    if not csv_files:
+        print(f"  ERROR: No CSV file found matching {csv_pattern}")
+        return None, None
+
+    csv_path = csv_files[0]
+    print(f"  Reading CSV: {csv_path} (column: {column})")
+
+    times_sec = []
+    values = []
+
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                t = float(row["Time Stamp"]) / 1000.0
+                v = float(row[column])
+                times_sec.append(t)
+                values.append(v)
+            except (ValueError, KeyError, TypeError):
+                continue
+
+    if not times_sec:
+        print(f"  ERROR: No valid '{column}' rows found in CSV.")
+        return None, None
+
+    print(f"  CSV has {len(times_sec)} rows, time range: {times_sec[0]:.1f}s - {times_sec[-1]:.1f}s")
+
+    filtered = [(t, v) for t, v in zip(times_sec, values) if t >= 60.0]
+    if not filtered:
+        print(f"  ERROR: No data points after 60 seconds (max timestamp: {times_sec[-1]:.1f}s).")
+        print("  Hint: OVR metrics capture was too short — check device connection and game load time.")
+        return None, None
+
+    times_sec, values = zip(*filtered)
+    return list(times_sec), list(values)
+
+
+def compute_avg_app_time(test_dir):
+    """Average App T (app GPU time, microseconds) over the run. None if unavailable."""
+    _, values = read_metric_series(test_dir, "app_gpu_time_microseconds")
+    if not values:
+        return None
+    avg = sum(values) / len(values)
+    print(f"  Average App T: {avg:.0f} us (over {len(values)} samples after 60s)")
+    return avg
+
+
 def generate_graph(test_dir, folderName):
     """Read the CSV and produce a fps Utilization line chart.
     Returns (graph_path, avg_fps) or (None, None) on failure.
@@ -145,43 +200,9 @@ def generate_graph(test_dir, folderName):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    csv_pattern = os.path.join(test_dir, "CSV_REPORT*.csv")
-    csv_files = glob.glob(csv_pattern)
-    if not csv_files:
-        print(f"  ERROR: No CSV file found matching {csv_pattern}")
-        return None, None
-
-    csv_path = csv_files[0]
-    print(f"  Reading CSV: {csv_path}")
-
-    times_sec = []
-    fps_values = []
-
-    with open(csv_path, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                t = float(row["Time Stamp"]) / 1000.0
-                fps = float(row["average_frame_rate"])
-                times_sec.append(t)
-                fps_values.append(fps)
-            except (ValueError, KeyError):
-                continue
-
+    times_sec, fps_values = read_metric_series(test_dir, "average_frame_rate")
     if not times_sec:
-        print("  ERROR: No valid data rows found in CSV.")
         return None, None
-
-    print(f"  CSV has {len(times_sec)} rows, time range: {times_sec[0]:.1f}s - {times_sec[-1]:.1f}s")
-
-    filtered = [(t, c) for t, c in zip(times_sec, fps_values) if t >= 60.0]
-    if not filtered:
-        print(f"  ERROR: No data points after 60 seconds (max timestamp: {times_sec[-1]:.1f}s).")
-        print("  Hint: OVR metrics capture was too short — check device connection and game load time.")
-        return None, None
-    times_sec, fps_values = zip(*filtered)
-    times_sec = list(times_sec)
-    fps_values = list(fps_values)
 
     print(f"  Plotting {len(times_sec)} data points (after 60s)...")
 
@@ -514,10 +535,31 @@ def _read_log_stats(test_dir):
     return errors, exceptions
 
 
-def _build_metadata(folder_name, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _write_ci_outputs(avg_fps, avg_app_time):
+    """Publish the run's headline metrics as GitHub Actions step outputs so the
+    workflow can threshold-check them without re-reading the test folder.
+    No-op outside CI (GITHUB_OUTPUT unset), and never fails the run.
+    """
+    out_path = os.environ.get("GITHUB_OUTPUT")
+    if not out_path:
+        return
+    try:
+        with open(out_path, "a", encoding="utf-8") as f:
+            if avg_fps is not None:
+                f.write(f"avg_fps={avg_fps:.1f}\n")
+            if avg_app_time is not None:
+                f.write(f"avg_app_time={avg_app_time:.0f}\n")
+        print(f"[CI] Wrote avg_fps / avg_app_time to {out_path}")
+    except Exception as e:
+        print(f"[CI] WARNING: Could not write step outputs: {e}")
+
+
+def _build_metadata(folder_name, avg_fps, avg_app_time, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     test_name, timestamp = _parse_folder_name(folder_name)
     entry = {
         "avg_fps": f"{avg_fps:.0f}" if avg_fps is not None else "N/A",
+        # App T (app GPU time) in microseconds, same metric the GPU automation test reports.
+        "avg_app_time": f"{avg_app_time:.0f}" if avg_app_time is not None else "N/A",
         "test_name": test_name,
         "timestamp": timestamp,
         "has_thumbnail": has_thumbnail,
@@ -531,18 +573,18 @@ def _build_metadata(folder_name, avg_fps, drive_link=None, has_thumbnail=False, 
     return entry
 
 
-def _save_local_metadata(test_dir, folder_name, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _save_local_metadata(test_dir, folder_name, avg_fps, avg_app_time, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Write metadata.json into the test folder on disk so it's readable offline."""
-    entry = _build_metadata(folder_name, avg_fps, drive_link, has_thumbnail, started_by, extra)
+    entry = _build_metadata(folder_name, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
     local_path = os.path.join(test_dir, "metadata.json")
     with open(local_path, "w", encoding="utf-8") as f:
         json.dump(entry, f, indent=2)
     print(f"  Saved local metadata: {local_path}")
 
 
-def _github_update_summary(folder_name, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _github_update_summary(folder_name, avg_fps, avg_app_time, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Upload a metadata.json file into the test's folder on GitHub Pages."""
-    entry = _build_metadata(folder_name, avg_fps, drive_link, has_thumbnail, started_by, extra)
+    entry = _build_metadata(folder_name, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
     content = json.dumps(entry, indent=2)
     repo_path = f"AllTestRuns/{folder_name}/metadata.json"
 
@@ -558,10 +600,11 @@ def _github_update_summary(folder_name, avg_fps, drive_link=None, has_thumbnail=
     r = requests.put(f"{GITHUB_API_BASE}/{repo_path}", headers=GITHUB_HEADERS, json=payload)
     r.raise_for_status()
     fps_str = f"{avg_fps:.0f}" if avg_fps is not None else "N/A"
-    print(f"  GitHub: Metadata uploaded — {folder_name} avg fps: {fps_str}")
+    app_time_str = f"{avg_app_time:.0f}" if avg_app_time is not None else "N/A"
+    print(f"  GitHub: Metadata uploaded — {folder_name} avg fps: {fps_str}, avg App T: {app_time_str} us")
 
 
-def upload_to_github(test_dir, folderName, avg_fps, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def upload_to_github(test_dir, folderName, avg_fps, avg_app_time, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Upload CSV and PNG to GitHub Pages and update the fps summary."""
     print(f"[GITHUB] Uploading run: {folderName}")
 
@@ -613,10 +656,10 @@ def upload_to_github(test_dir, folderName, avg_fps, drive_link=None, has_thumbna
         # Save locally first so the metadata lives alongside the run data
         # on disk even if the GitHub upload fails.
         try:
-            _save_local_metadata(test_dir, folderName, avg_fps, drive_link, has_thumbnail, started_by, extra)
+            _save_local_metadata(test_dir, folderName, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
         except Exception as e:
             print(f"  WARNING: Failed to save local metadata.json: {e}")
-        _github_update_summary(folderName, avg_fps, drive_link, has_thumbnail, started_by, extra)
+        _github_update_summary(folderName, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
     except Exception as e:
         print(f"  WARNING: Failed to update summary: {e}")
         failed.append("summary.json")
@@ -665,6 +708,7 @@ def main():
     do_upload = not args.graph_only
 
     avg_fps = None
+    avg_app_time = None
     mp4_drive_link = None
     has_thumbnail = False
 
@@ -675,6 +719,10 @@ def main():
             print("[GRAPH] Success.")
         else:
             print("[GRAPH] Failed.")
+
+        print("[METRICS] Computing average App T...")
+        avg_app_time = compute_avg_app_time(test_dir)
+        _write_ci_outputs(avg_fps, avg_app_time)
 
         # Quest screencap captures both eyes side-by-side and each eye is
         # tilted, so crop to left eye, rotate to straighten, then trim
@@ -790,7 +838,7 @@ def main():
 
         print("[UPLOAD] Uploading files to GitHub Pages...")
         try:
-            success = upload_to_github(test_dir, folderName, avg_fps, mp4_drive_link, has_thumbnail, args.started_by, extra)
+            success = upload_to_github(test_dir, folderName, avg_fps, avg_app_time, mp4_drive_link, has_thumbnail, args.started_by, extra)
             if success:
                 print("[UPLOAD] GitHub upload success.")
                 if profiler_raw_path and os.path.isfile(profiler_raw_path):
