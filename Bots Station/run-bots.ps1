@@ -104,7 +104,14 @@ Write-Host ""
 if (Test-Path $exePath) {
     for ($i = 1; $i -le $InstanceCount; $i++) {
         Start-Sleep -Seconds 3
-        Start-Process -FilePath $exePath -ArgumentList '-batchmode','-nographics', '-noaudio' -WorkingDirectory $BuildDir -NoNewWindow
+
+	$logPath = "C:\Users\pigsys\Desktop\Bots Station\Logs\Bots Logs\bot_$i.log"
+
+	Start-Process -FilePath $exePath `
+            -ArgumentList '-batchmode', '-nographics', '-noaudio', '-logFile', "`"$logPath`"" `
+            -WorkingDirectory $BuildDir `
+            -NoNewWindow
+
         Write-Host "Launched instance $i/$InstanceCount"
     }
 }
