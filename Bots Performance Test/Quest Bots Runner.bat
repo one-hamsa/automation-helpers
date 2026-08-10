@@ -330,15 +330,27 @@ ping 127.0.0.1 -n 4 >nul
 
 :: Pull the il2cpplab capture session, then delete it so the next run starts clean (the
 :: recorder never removes old sessions itself - the disk cap only bounds the live one).
+:: Local layout mirrors the Drive one exactly: "C++ Profiler" holds the capture files and
+:: "C++ Profiler\Symbol Parser" the sites.db + symbols needed to read them.
 :: Parse it on a machine with the matching Build_<code>_Profiler_Symbols artifact:
-::   il2cpplab.py parse "<session dir>" --sites sites.db --symbols libil2cpp.so
+::   il2cpplab.py parse "<C++ Profiler>" --sites sites.db --symbols libil2cpp.so
+set "IL2CPPLAB_LOCAL_DIR=%CURRENT_TEST_DIR%\C++ Profiler"
 echo    Pulling il2cpplab capture from headset...
 adb wait-for-device
-adb pull "%IL2CPPLAB_ROOT%" "%CURRENT_TEST_DIR%\il2cpplab"
+adb pull "%IL2CPPLAB_ROOT%" "%IL2CPPLAB_LOCAL_DIR%"
 if errorlevel 1 (
     echo    WARNING: no il2cpplab capture pulled - check that this is a perf_tracking build.
 ) else (
     adb shell "rm -rf %IL2CPPLAB_ROOT%"
+)
+
+:: adb pull keeps the recorder's per-session subfolder; lift its files up so the capture
+:: sits directly in "C++ Profiler" - one run records one session, and il2cpplab parses a
+:: flat capture folder.
+for /d %%S in ("%IL2CPPLAB_LOCAL_DIR%\*") do (
+    echo    Flattening capture session %%~nxS...
+    robocopy "%%~fS" "%IL2CPPLAB_LOCAL_DIR%" /E /MOVE /NFL /NDL /NJH /NJS /NP >nul
+    if errorlevel 8 echo    WARNING: flattening the capture session failed.
 )
 
 :: sites.db + libil2cpp.so from the Build_<code>_Profiler_Symbols artifact of the exact
@@ -349,7 +361,7 @@ if errorlevel 1 (
 if defined IL2CPPLAB_SYMBOLS_DIR (
     if exist "%IL2CPPLAB_SYMBOLS_DIR%" (
         echo    Copying il2cpplab symbols from %IL2CPPLAB_SYMBOLS_DIR%...
-        robocopy "%IL2CPPLAB_SYMBOLS_DIR%" "%CURRENT_TEST_DIR%\il2cpplab_symbols" /E /NFL /NDL /NJH /NJS /NP >nul
+        robocopy "%IL2CPPLAB_SYMBOLS_DIR%" "%IL2CPPLAB_LOCAL_DIR%\Symbol Parser" /E /NFL /NDL /NJH /NJS /NP >nul
         :: robocopy exit codes 0-7 are success (copied / nothing to do); 8+ is a real failure
         if errorlevel 8 echo    WARNING: copying the il2cpplab symbols failed.
     ) else (
