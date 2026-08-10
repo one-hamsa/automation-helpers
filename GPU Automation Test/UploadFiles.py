@@ -27,6 +27,10 @@ import requests
 # UploadFiles.py lives in <repo>/GPU Automation Test/, the parser in <repo>/Analysis/.
 LOG_PARSER = Path(__file__).resolve().parent.parent / "Analysis" / "log_parser.py"
 
+# Game-log folders the .bat pulls off the headset — one per app launch: the metrics
+# phase and the RenderDoc phase. Both get uploaded to Drive and GitHub Pages.
+REPORT_LOGS_DIRS = ("Report Logs", "Report Logs RenderDoc")
+
 
 def run_log_parser(test_dir):
     """Parse the game logs pulled into <test_dir>/Report Logs (writes <session>_log_findings.csv
@@ -254,6 +258,31 @@ def upload_to_drive(test_dir, folderName):
         link = result.get("webViewLink", "")
         print(f"    Done. {link}")
 
+    # Upload the pulled game logs as subfolders on Drive, walking subdirectories
+    # recursively so nested log files are included. Two folders because the run has
+    # two launches: the metrics phase and the RenderDoc phase (see the .bat).
+    for logs_dir_name in REPORT_LOGS_DIRS:
+        report_logs_dir = os.path.join(test_dir, logs_dir_name)
+        if not os.path.isdir(report_logs_dir):
+            continue
+        print(f"  Uploading '{logs_dir_name}' folder to Drive...")
+        logs_folder_id = create_drive_folder(service, logs_dir_name, folder_id)
+        # adb pull creates a timestamped subfolder inside the logs folder,
+        # so collect all files recursively and upload them flat into
+        # the Drive folder.
+        log_file_count = 0
+        for dirpath, _, filenames in os.walk(report_logs_dir):
+            for fname in filenames:
+                file_path = os.path.join(dirpath, fname)
+                file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                print(f"    Uploading log: {fname} ({file_size_mb:.1f} MB)...")
+                upload_file_drive(service, file_path, logs_folder_id)
+                log_file_count += 1
+        if log_file_count == 0:
+            print(f"  WARNING: '{logs_dir_name}' folder exists but no files found inside!")
+        else:
+            print(f"  Uploaded {log_file_count} log file(s) from '{logs_dir_name}' to Drive.")
+
     print(f"  All files uploaded to Drive folder: {folderName}")
     return drive_folder_link
 
@@ -443,6 +472,27 @@ def upload_to_github(test_dir, folderName, avg_gpu, drive_link=None, has_thumbna
         except Exception as e:
             print(f"  WARNING: Failed to upload {filename}: {e}")
             failed.append(filename)
+
+    # Upload the game logs to GitHub Pages, one folder per launch phase.
+    for logs_dir_name in REPORT_LOGS_DIRS:
+        report_logs_dir = os.path.join(test_dir, logs_dir_name)
+        if not os.path.isdir(report_logs_dir):
+            continue
+        print(f"  Uploading '{logs_dir_name}' to GitHub Pages...")
+        log_file_count = 0
+        for dirpath, _, filenames in os.walk(report_logs_dir):
+            for fname in filenames:
+                file_path = os.path.join(dirpath, fname)
+                file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                print(f"    Uploading log: {fname} ({file_size_mb:.1f} MB)...")
+                try:
+                    _github_upload_file(file_path, f"AllTestRuns/{folderName}/{logs_dir_name}/{fname}")
+                    log_file_count += 1
+                except Exception as e:
+                    print(f"    WARNING: Failed to upload log {fname}: {e}")
+                    failed.append(fname)
+        if log_file_count > 0:
+            print(f"  Uploaded {log_file_count} log file(s) from '{logs_dir_name}' to GitHub Pages.")
 
     # Always write metadata so the run shows up on the dashboard even when a
     # metric is missing (e.g. record-metrics wasn't enabled, so avg_gpu is None).
