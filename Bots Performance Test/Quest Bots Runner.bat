@@ -198,48 +198,42 @@ adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_1.png
 
 ping 127.0.0.1 -n 31 >nul
 
-echo starting the 20 second unity profiling recording to capture the CPU performance
+echo preparing the CPU performance capture
 adb wait-for-device
 adb shell input keyevent KEYCODE_WAKEUP
 
-:: The Unity editor decides which app to profile by asking the device for the LAST RESUMED
-:: activity (adb shell dumpsys activity top) and forwarding to localabstract:Unity-<that package>.
-:: If a system panel/dialog resumed after the game (or the WAKEUP above resumed the shell),
-:: Unity forwards to the wrong package and the profiler handshake fails for the whole run.
-:: Re-focus the game so it is the last resumed activity, then give the OS a moment to settle.
+
 adb shell monkey -p com.onehamsa.underdogs -c android.intent.category.LAUNCHER 1
 ping 127.0.0.1 -n 4 >nul
 
-:: OPTIONAL (RECORD_VIDEO=1): gameplay video via the Quest's NATIVE capture (single eye,
-:: undistorted — same as the in-headset Record button; adb screenrecord would give the
-:: raw dual-eye distorted compositor output). AutoProfiler starts/stops the capture so
-:: the video sits strictly INSIDE the profiler window — every video frame's stamp (fc,
-:: burned in by FrameStampOverlay, forced on in bot builds) is guaranteed to exist in
-:: the profiler capture. Join them with Analysis\video_framestamp_decode.py.
-:: Here we only set the capture config and pass the flag down (BOT_RECORD_VIDEO env).
-if not "!RECORD_VIDEO!"=="1" goto skip_video_config
-echo configuring headset native video capture
-adb shell setprop debug.oculus.screenCaptureEye 0
-adb shell setprop debug.oculus.capture.width 1024
-adb shell setprop debug.oculus.capture.height 1024
-adb shell setprop debug.oculus.capture.bitrate 8000000
-set "BOT_RECORD_VIDEO=!RECORD_VIDEO!"
-:skip_video_config
 
-:: The rig-local Profiler-Project at E:\Automation is synced from the repo checkout by the
-:: "Sync Profiler-Project to the rig" step in Bots_Automation_Runner.yaml, before this bat runs.
-"C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
+::the unity profiler does not run, we have the new il2ccplab profiler
 
-:: safety only — AutoProfiler already stopped the capture inside the profiler window
-if not "!RECORD_VIDEO!"=="1" goto skip_video_stop
-adb shell setprop debug.oculus.enableVideoCapture 0
-ping 127.0.0.1 -n 3 >nul
-:skip_video_stop
+:: "C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
+
+
+set "IL2CPPLAB_ROOT=/sdcard/Android/data/com.onehamsa.underdogs/files/il2cpplab"
+
+echo starting the 30 second il2cpplab CPU capture
+adb wait-for-device
+adb shell "mkdir -p %IL2CPPLAB_ROOT%"
+adb shell "echo cap 200 > %IL2CPPLAB_ROOT%/control.txt"
+adb shell "echo start >> %IL2CPPLAB_ROOT%/control.txt"
+
+ping 127.0.0.1 -n 31 >nul
+
+echo stopping the il2cpplab capture
+adb wait-for-device
+adb shell "echo stop > %IL2CPPLAB_ROOT%/control.txt"
+:: let the writer flush and close the session files before the game is force-stopped
+ping 127.0.0.1 -n 4 >nul
+:: shows up in the log when the capture root is wrong (internal storage) or the build isn't a tracking build
+echo il2cpplab sessions on the device:
+adb shell "ls -l %IL2CPPLAB_ROOT%"
 
 echo    Taking screenshot 2 from headset...
 adb wait-for-device
 adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_2.png
-
 
 :: ---- simpleperf native sampling capture (native CPU hotspots; see Analysis\SIMPLEPERF_SETUP.md) ----
 :: Sequenced AFTER the Unity profiler recording so sampling overhead never contaminates the .raw.
@@ -325,6 +319,19 @@ adb pull /sdcard/AUTOMATION_SCREENSHOT_3.png "%CURRENT_TEST_DIR%\SCREENSHOT_3.pn
 adb shell rm /sdcard/AUTOMATION_SCREENSHOT_3.png
 
 ping 127.0.0.1 -n 4 >nul
+
+:: Pull the il2cpplab capture session, then delete it so the next run starts clean (the
+:: recorder never removes old sessions itself - the disk cap only bounds the live one).
+:: Parse it on a machine with the matching Build_<code>_Profiler_Symbols artifact:
+::   il2cpplab.py parse "<session dir>" --sites sites.db --symbols libil2cpp.so
+echo    Pulling il2cpplab capture from headset...
+adb wait-for-device
+adb pull "%IL2CPPLAB_ROOT%" "%CURRENT_TEST_DIR%\il2cpplab"
+if errorlevel 1 (
+    echo    WARNING: no il2cpplab capture pulled - check that this is a perf_tracking build.
+) else (
+    adb shell "rm -rf %IL2CPPLAB_ROOT%"
+)
 
 :: Pull the game logs folder from the headset into "Report Logs"
 echo    Pulling game logs from headset...

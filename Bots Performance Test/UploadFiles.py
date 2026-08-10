@@ -57,37 +57,39 @@ def run_parsers(test_dir, profiler_raw_path):
         except Exception as e:
             print(f"[PARSE] log_parser crashed: {e}")
 
+    # Unity Profiler .raw parsers. Both read the editor-profiler recording, so both are
+    # skipped when it is absent — the simpleperf report below reads perf.data instead and
+    # runs either way, so this block must not return.
     if not profiler_raw_path or not os.path.isfile(profiler_raw_path):
-        print("[PARSE] No profiler recording to parse, skipping profiler parse.")
-        return
-    if not PROFILER_PARSER.is_file():
-        print(f"[PARSE] profiler_parser.py not found at {PROFILER_PARSER}, skipping profiler parse.")
-        return
-
-    print(f"[PARSE] Running profiler_parser on {profiler_raw_path}")
-    try:
-        subprocess.run(
-            [py, str(PROFILER_PARSER), profiler_raw_path],
-            check=False,
-        )
-    except Exception as e:
-        print(f"[PARSE] profiler_parser crashed: {e}")
-
-    # Tail-vs-median attribution — writes TAIL_REPORT.csv next to the .raw.
-    # Answers "which systems drive the slow frames" (p90/p95), which the aggregated
-    # profiler_parser dump cannot: it excludes wait/idle time and one-off stall frames
-    # so the tail band reflects real, recurring spike cost.
-    if not TAIL_REPORT.is_file():
-        print(f"[PARSE] tail_report.py not found at {TAIL_REPORT}, skipping tail report.")
+        print("[PARSE] No UNITY profiler recording to parse, skipping unity profiler parse.")
     else:
-        print(f"[PARSE] Running tail_report on {profiler_raw_path}")
-        try:
-            subprocess.run(
-                [py, str(TAIL_REPORT), profiler_raw_path],
-                check=False,
-            )
-        except Exception as e:
-            print(f"[PARSE] tail_report crashed: {e}")
+        if not PROFILER_PARSER.is_file():
+            print(f"[PARSE] profiler_parser.py not found at {PROFILER_PARSER}, skipping profiler parse.")
+        else:
+            print(f"[PARSE] Running profiler_parser on {profiler_raw_path}")
+            try:
+                subprocess.run(
+                    [py, str(PROFILER_PARSER), profiler_raw_path],
+                    check=False,
+                )
+            except Exception as e:
+                print(f"[PARSE] profiler_parser crashed: {e}")
+
+        # Tail-vs-median attribution — writes TAIL_REPORT.csv next to the .raw.
+        # Answers "which systems drive the slow frames" (p90/p95), which the aggregated
+        # profiler_parser dump cannot: it excludes wait/idle time and one-off stall frames
+        # so the tail band reflects real, recurring spike cost.
+        if not TAIL_REPORT.is_file():
+            print(f"[PARSE] tail_report.py not found at {TAIL_REPORT}, skipping tail report.")
+        else:
+            print(f"[PARSE] Running tail_report on {profiler_raw_path}")
+            try:
+                subprocess.run(
+                    [py, str(TAIL_REPORT), profiler_raw_path],
+                    check=False,
+                )
+            except Exception as e:
+                print(f"[PARSE] tail_report crashed: {e}")
 
     # simpleperf native-sampling report — writes SIMPLEPERF_REPORT.csv next to perf.data.
     # perf.data only exists when the .bat capture step ran (simpleperf scripts vendored);

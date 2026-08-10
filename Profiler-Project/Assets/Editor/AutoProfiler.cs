@@ -28,17 +28,6 @@ public static class AutoProfiler
 
     private static bool recorded;
 
-    // Optional headset video capture (BOT_RECORD_VIDEO=1, set by Quest Bots Runner.bat).
-    // AutoProfiler owns the start/stop so the video sits strictly INSIDE the profiler
-    // window: started after ProfilerDriver.enabled, stopped VideoStopMargin before the
-    // recording ends (the mp4 needs a moment to finalize) — so every video frame's
-    // stamp (fc) is guaranteed to exist in the capture. The capture config props
-    // (eye/size/bitrate) are set by the bat before we launch.
-    private const float VideoStopMargin = 4f;
-    private static bool _videoRequested;
-    private static bool _videoStarted;
-    private static bool _videoStopped;
-
     // THE CMD COMMAND TO RUN THIS SCRIPT IN HEADLESS MODE IS:
 
     //"C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "D:\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "D:\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
@@ -70,10 +59,6 @@ public static class AutoProfiler
         SetProfilerCaptureLimits();
 
         //reset all vars:
-        _videoRequested = Environment.GetEnvironmentVariable("BOT_RECORD_VIDEO") == "1";
-        _videoStarted = false;
-        _videoStopped = false;
-
         ConnectedQuestName = "";
         CurrentConnectedDevice = "";
         DeviceConnectedTime = 0;
@@ -83,15 +68,13 @@ public static class AutoProfiler
         recorded = false;
 
         Console.WriteLine("[AutoProfiler] Starting the profiler...");
-        Console.WriteLine($"[AutoProfiler] Headset video capture requested: {_videoRequested}");
 
         _discoveryStartTime = EditorApplication.timeSinceStartup;
         EditorApplication.update += WaitForDevice;
     }
 
     // The editor profiler is a ring buffer: with the default "Frame Count" preference (300)
-    // the HEAD of a 20s recording gets evicted, and video frames from early in the window
-    // would have no matching profiler frame. Raise it to the 2000 max (20s @ 90Hz = 1800)
+    // the HEAD of a 20s recording gets evicted. Raise it to the 2000 max (20s @ 90Hz = 1800)
     // so the whole window is retained. ProfilerUserSettings is internal — reflection.
     private static void SetProfilerCaptureLimits()
     {
@@ -205,27 +188,8 @@ public static class AutoProfiler
         _recordStartTime = EditorApplication.timeSinceStartup;
         DeviceConnectedTime = EditorApplication.timeSinceStartup;
 
-        if (_videoRequested)
-            StartVideoCapture();
-
         Console.WriteLine($"[AutoProfiler] Started recording for {MaxRecordingDuration} seconds or until the quest closes...");
         EditorApplication.update += RecordTimer;
-    }
-
-    private static void StartVideoCapture()
-    {
-        _videoStarted = true;
-        string result = RunAdb("shell setprop debug.oculus.enableVideoCapture 1");
-        Console.WriteLine($"[AutoProfiler] Started headset video capture (result: \"{result}\")");
-    }
-
-    private static void StopVideoCapture()
-    {
-        if (!_videoStarted || _videoStopped)
-            return;
-        _videoStopped = true;
-        string result = RunAdb("shell setprop debug.oculus.enableVideoCapture 0");
-        Console.WriteLine($"[AutoProfiler] Stopped headset video capture (result: \"{result}\")");
     }
 
     private static void RecordTimer()
@@ -252,13 +216,6 @@ public static class AutoProfiler
 
         }
 
-        // stop the video inside the profiler window so its last frames still have profiler data
-        if (_videoStarted && !_videoStopped &&
-            EditorApplication.timeSinceStartup - _recordStartTime >= MaxRecordingDuration - VideoStopMargin)
-        {
-            StopVideoCapture();
-        }
-
         if (EditorApplication.timeSinceStartup - _recordStartTime >= MaxRecordingDuration)
         {
             EditorApplication.update -= RecordTimer;
@@ -276,11 +233,6 @@ public static class AutoProfiler
             return;
 
         SavedAlready = true;
-
-        // lost-connection / quitting paths reach here with the video still rolling — stop it
-        // now; frames past the connection loss have no profiler data anyway, the capture is
-        // only trustworthy on the normal timer path (which already stopped it with margin)
-        StopVideoCapture();
 
         // Unsubscribe so Exit(0) doesn't trigger a second save via quitting
         EditorApplication.quitting -= SaveRecordingData;
