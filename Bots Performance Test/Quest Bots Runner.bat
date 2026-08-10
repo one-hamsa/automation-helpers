@@ -216,15 +216,23 @@ set "IL2CPPLAB_ROOT=/sdcard/Android/data/com.onehamsa.underdogs/files/il2cpplab"
 
 echo starting the 30 second il2cpplab CPU capture
 adb wait-for-device
-adb shell "mkdir -p %IL2CPPLAB_ROOT%"
+:: adb shell runs as uid shell with umask 007, so a plain mkdir/echo here leaves the
+:: root at 0770 and control.txt at 0660, both shell:ext_data_rw - and the game process
+:: is NOT in the ext_data_rw group, so it can neither enter the root nor read the file,
+:: and the capture never starts. chmod 2777 adds the o+rwx the game needs while keeping
+:: the setgid bit, so the session dir the game creates inherits group ext_data_rw and
+:: stays readable by adb pull; control.txt needs the same treatment after every write.
+adb shell "mkdir -p %IL2CPPLAB_ROOT% && chmod 2777 %IL2CPPLAB_ROOT%"
 adb shell "echo cap 200 > %IL2CPPLAB_ROOT%/control.txt"
 adb shell "echo start >> %IL2CPPLAB_ROOT%/control.txt"
+adb shell "chmod 666 %IL2CPPLAB_ROOT%/control.txt"
 
 ping 127.0.0.1 -n 31 >nul
 
 echo stopping the il2cpplab capture
 adb wait-for-device
 adb shell "echo stop > %IL2CPPLAB_ROOT%/control.txt"
+adb shell "chmod 666 %IL2CPPLAB_ROOT%/control.txt"
 :: let the writer flush and close the session files before the game is force-stopped
 ping 127.0.0.1 -n 4 >nul
 :: shows up in the log when the capture root is wrong (internal storage) or the build isn't a tracking build
@@ -348,7 +356,7 @@ echo ...
 echo [10/10] Generating App CPU Time graph...
 echo ...
 
-python "%~dp0UploadFiles.py" "%CURRENT_TEST_DIR%" "%DRIVE_FOLDER_NAME%" --started-by "%STARTED_BY%" --num-pc-bots "%NUM_PC_BOTS%" --commit-sha "%COMMIT_SHA%" --commit-ref "%COMMIT_REF%" --github-token "%UPLOAD_TO_AUTOMATION_REPOS_PAT%"
+python "%~dp0UploadFiles.py" "%CURRENT_TEST_DIR%" "%DRIVE_FOLDER_NAME%" --started-by "%STARTED_BY%" --num-pc-bots "%NUM_PC_BOTS%" --commit-sha "%COMMIT_SHA%" --commit-ref "%COMMIT_REF%" --github-token "%AUTOMATION_REPOS_PAT%"
 
 :: ************************************************    RESETTING EVERYTHING BACK AGAIN   ************************************************
 
