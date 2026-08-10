@@ -341,6 +341,24 @@ if errorlevel 1 (
     adb shell "rm -rf %IL2CPPLAB_ROOT%"
 )
 
+:: sites.db + libil2cpp.so from the Build_<code>_Profiler_Symbols artifact of the exact
+:: build under test. il2cpplab refuses a capture whose build id doesn't match sites.db,
+:: so the capture is unreadable without these - they travel with it to Drive, where
+:: UploadFiles.py puts them under "C++ Profiler\Symbol Parser".
+:: IL2CPPLAB_SYMBOLS_DIR is set by the workflow, which downloads the artifact.
+if defined IL2CPPLAB_SYMBOLS_DIR (
+    if exist "%IL2CPPLAB_SYMBOLS_DIR%" (
+        echo    Copying il2cpplab symbols from %IL2CPPLAB_SYMBOLS_DIR%...
+        robocopy "%IL2CPPLAB_SYMBOLS_DIR%" "%CURRENT_TEST_DIR%\il2cpplab_symbols" /E /NFL /NDL /NJH /NJS /NP >nul
+        :: robocopy exit codes 0-7 are success (copied / nothing to do); 8+ is a real failure
+        if errorlevel 8 echo    WARNING: copying the il2cpplab symbols failed.
+    ) else (
+        echo    WARNING: IL2CPPLAB_SYMBOLS_DIR is set but does not exist: %IL2CPPLAB_SYMBOLS_DIR%
+    )
+) else (
+    echo    No IL2CPPLAB_SYMBOLS_DIR set - the capture will upload without its symbols.
+)
+
 :: Pull the game logs folder from the headset into "Report Logs"
 echo    Pulling game logs from headset...
 adb wait-for-device

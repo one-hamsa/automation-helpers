@@ -116,6 +116,12 @@ DRIVE_PARENT_FOLDER_ID = "1Ckhix2o8tbz3VA6i25UQ1jf7JKx5bkQD"
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
+# Subfolders of the test folder holding the il2cpplab CPU capture and the sites.db +
+# symbol artifact needed to parse it. Written by "Quest Bots Runner.bat"; uploaded to
+# Drive as "C++ Profiler" and "C++ Profiler/Symbol Parser".
+IL2CPPLAB_CAPTURE_DIR = "il2cpplab"
+IL2CPPLAB_SYMBOLS_DIR = "il2cpplab_symbols"
+
 # OAuth credentials — stored on the runner machine, NOT in the repo.
 RUNNER_AUTH_DIR = r"E:\Automation\UNDERDOGS Bots Automation\Runner"
 CREDENTIALS_FILE = os.path.join(RUNNER_AUTH_DIR, "credentials.json")
@@ -275,11 +281,11 @@ def create_drive_folder(service, name, parent_id):
     return folder.get("id")
 
 
-def upload_file_drive(service, file_path, folder_id, max_retries=3):
+def upload_file_drive(service, file_path, folder_id, max_retries=3, drive_name=None):
     import time
     from googleapiclient.http import MediaFileUpload
 
-    file_name = os.path.basename(file_path)
+    file_name = drive_name or os.path.basename(file_path)
     file_size = os.path.getsize(file_path)
 
     mime_map = {".csv": "text/csv", ".png": "image/png"}
@@ -367,8 +373,68 @@ def upload_to_drive(test_dir, folderName):
         else:
             print(f"  Uploaded {log_file_count} log file(s) to Drive.")
 
+    upload_cpp_profiler_to_drive(service, test_dir, folder_id)
+
     print(f"  All files uploaded to Drive folder: {folderName}")
     return drive_folder_link
+
+
+def _upload_dir_flat(service, local_dir, drive_folder_id, indent="    "):
+    """Upload every file under local_dir into one Drive folder, ignoring the local
+    subfolder layout. Returns the number of files uploaded. Names that repeat across
+    subfolders are prefixed with their folder so nothing is silently overwritten."""
+    used_names = set()
+    count = 0
+    for dirpath, _, filenames in os.walk(local_dir):
+        for fname in sorted(filenames):
+            file_path = os.path.join(dirpath, fname)
+            name = fname
+            if name in used_names:
+                name = f"{os.path.basename(dirpath)}_{fname}"
+            used_names.add(name)
+            size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            print(f"{indent}Uploading: {name} ({size_mb:.1f} MB)...")
+            upload_file_drive(service, file_path, drive_folder_id, drive_name=name)
+            count += 1
+    return count
+
+
+def upload_cpp_profiler_to_drive(service, test_dir, run_folder_id):
+    """Upload the il2cpplab capture as a 'C++ Profiler' subfolder of the run folder,
+    with the build's sites.db + symbol artifact in a 'Symbol Parser' subfolder of that.
+    Drive-only (like the old profiler .raw) - these are far too big for GitHub, and
+    a capture is unreadable without the symbols from the exact build that produced it.
+    """
+    capture_dir = os.path.join(test_dir, IL2CPPLAB_CAPTURE_DIR)
+    symbols_dir = os.path.join(test_dir, IL2CPPLAB_SYMBOLS_DIR)
+    if not os.path.isdir(capture_dir) and not os.path.isdir(symbols_dir):
+        return
+
+    print("  Uploading 'C++ Profiler' folder to Drive...")
+    profiler_folder_id = create_drive_folder(service, "C++ Profiler", run_folder_id)
+
+    # adb pull nests the capture files in a per-session folder; flatten it, since one
+    # test run records exactly one session and il2cpplab parses a flat capture folder.
+    capture_count = _upload_dir_flat(service, capture_dir, profiler_folder_id) \
+        if os.path.isdir(capture_dir) else 0
+    if capture_count == 0:
+        print("  WARNING: no il2cpplab capture files to upload - "
+              "check that this was a tracking build and the capture actually started.")
+    else:
+        print(f"  Uploaded {capture_count} capture file(s) to Drive.")
+
+    if not os.path.isdir(symbols_dir):
+        print("  WARNING: no il2cpplab symbols in the test folder - the capture cannot be "
+              "parsed without them (Build_<code>_Profiler_Symbols artifact).")
+        return
+
+    print("  Uploading 'Symbol Parser' folder to Drive...")
+    symbols_folder_id = create_drive_folder(service, "Symbol Parser", profiler_folder_id)
+    symbol_count = _upload_dir_flat(service, symbols_dir, symbols_folder_id)
+    if symbol_count == 0:
+        print("  WARNING: 'Symbol Parser' folder is empty!")
+    else:
+        print(f"  Uploaded {symbol_count} symbol file(s) to Drive.")
 
 
 # ---------------------------------------------------------------------------
