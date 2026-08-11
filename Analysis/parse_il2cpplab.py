@@ -34,16 +34,21 @@ SYMBOL_ARTIFACTS = ("libil2cpp.so", "GameAssembly.pdb")
 
 def find_inputs(capture_dir):
     """sites.db (required) and the symbol artifact (optional - without it the parse still
-    produces a db, with native frames left as module+offset)."""
+    produces a db, with native frames left as module+offset).
+
+    Searched recursively: build.yaml uploads the whole "<player>.il2cpplab" sidecar
+    directory as the symbols artifact, so both files arrive one level down."""
     symbols_dir = capture_dir / SYMBOL_DIR_NAME
-    sites = symbols_dir / "sites.db"
-    if not sites.is_file():
-        print(f"[IL2CPPLAB] no sites.db under '{symbols_dir}' - cannot parse.")
+    sites = next(iter(sorted(symbols_dir.rglob("sites.db"))), None)
+    if sites is None:
+        found = sorted(p.name for p in symbols_dir.rglob("*") if p.is_file())[:10]
+        print(f"[IL2CPPLAB] no sites.db under '{symbols_dir}' - cannot parse. "
+              f"Found instead: {', '.join(found) if found else '(nothing)'}")
         return None, None
-    artifact = next((symbols_dir / n for n in SYMBOL_ARTIFACTS
-                     if (symbols_dir / n).is_file()), None)
+    artifact = next((p for n in SYMBOL_ARTIFACTS
+                     for p in sorted(symbols_dir.rglob(n)) if p.is_file()), None)
     if artifact is None:
-        print(f"[IL2CPPLAB] WARNING: no symbol artifact in '{symbols_dir}' "
+        print(f"[IL2CPPLAB] WARNING: no symbol artifact under '{symbols_dir}' "
               f"({' / '.join(SYMBOL_ARTIFACTS)}) - native frames will stay unresolved.")
     return sites, artifact
 
