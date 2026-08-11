@@ -116,9 +116,13 @@ DRIVE_PARENT_FOLDER_ID = "1Ckhix2o8tbz3VA6i25UQ1jf7JKx5bkQD"
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
-# Subfolders of the test folder holding the il2cpplab CPU capture and the sites.db +
-# symbol artifact needed to parse it, written by "Quest Bots Runner.bat". The Drive
-# folders carry the same names, so a run looks the same locally and on Drive.
+# The parsed il2cpplab capture: one self-contained, already-symbolized db, zipped by
+# Analysis/parse_il2cpplab.py. This is the normal artifact for a tracking build.
+PROFILER_DB_ZIP = "il2cpplab.db.zip"
+
+# Subfolders of the test folder holding the raw il2cpplab capture and the sites.db +
+# symbol artifact needed to parse it, written by "Quest Bots Runner.bat". Present only
+# when the parse step could not run or failed; the Drive folders carry the same names.
 CPP_PROFILER_DIR = "C++ Profiler"
 SYMBOL_PARSER_DIR = "Symbol Parser"
 
@@ -401,15 +405,27 @@ def _upload_dir_flat(service, local_dir, drive_folder_id, indent="    ", skip_di
 
 
 def upload_cpp_profiler_to_drive(service, test_dir, run_folder_id):
-    """Upload the il2cpplab capture as a 'C++ Profiler' subfolder of the run folder,
-    with the build's sites.db + symbol artifact in a 'Symbol Parser' subfolder of that.
-    Drive-only (like the old profiler .raw) - these are far too big for GitHub, and
-    a capture is unreadable without the symbols from the exact build that produced it.
+    """Upload the run's il2cpplab CPU capture. Normally that is the parsed, zipped db -
+    one file, already symbolized, readable on its own. Only when the parse step could not
+    run or failed does the raw capture survive on disk, and then it is uploaded as a
+    'C++ Profiler' folder with the build's sites.db + symbol artifact under
+    'Symbol Parser', so it can still be parsed by hand.
+
+    Drive-only (like the old profiler .raw) - far too big for GitHub.
     """
+    db_zip = os.path.join(test_dir, PROFILER_DB_ZIP)
+    if os.path.isfile(db_zip):
+        size_mb = os.path.getsize(db_zip) / (1024 * 1024)
+        print(f"  Uploading: {PROFILER_DB_ZIP} ({size_mb:.1f} MB)...")
+        result = upload_file_drive(service, db_zip, run_folder_id)
+        print(f"    Done. {result.get('webViewLink', '')}")
+        return
+
     capture_dir = os.path.join(test_dir, CPP_PROFILER_DIR)
     symbols_dir = os.path.join(capture_dir, SYMBOL_PARSER_DIR)
     if not os.path.isdir(capture_dir):
         return
+    print("  WARNING: no parsed il2cpplab db - uploading the raw capture instead.")
 
     print(f"  Uploading '{CPP_PROFILER_DIR}' folder to Drive...")
     profiler_folder_id = create_drive_folder(service, CPP_PROFILER_DIR, run_folder_id)

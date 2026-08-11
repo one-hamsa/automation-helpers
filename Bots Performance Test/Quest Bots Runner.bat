@@ -330,10 +330,9 @@ ping 127.0.0.1 -n 4 >nul
 
 :: Pull the il2cpplab capture session, then delete it so the next run starts clean (the
 :: recorder never removes old sessions itself - the disk cap only bounds the live one).
-:: Local layout mirrors the Drive one exactly: "C++ Profiler" holds the capture files and
-:: "C++ Profiler\Symbol Parser" the sites.db + symbols needed to read them.
-:: Parse it on a machine with the matching Build_<code>_Profiler_Symbols artifact:
-::   il2cpplab.py parse "<C++ Profiler>" --sites sites.db --symbols libil2cpp.so
+:: "C++ Profiler" holds the capture files and "C++ Profiler\Symbol Parser" the sites.db +
+:: symbols needed to read them. Both are inputs to the parse step below, which replaces
+:: them with a single il2cpplab.db.zip - that zip is what gets kept and uploaded.
 set "IL2CPPLAB_LOCAL_DIR=%CURRENT_TEST_DIR%\C++ Profiler"
 echo    Pulling il2cpplab capture from headset...
 adb wait-for-device
@@ -355,8 +354,7 @@ for /d %%S in ("%IL2CPPLAB_LOCAL_DIR%\*") do (
 
 :: sites.db + libil2cpp.so from the Build_<code>_Profiler_Symbols artifact of the exact
 :: build under test. il2cpplab refuses a capture whose build id doesn't match sites.db,
-:: so the capture is unreadable without these - they travel with it to Drive, where
-:: UploadFiles.py puts them under "C++ Profiler\Symbol Parser".
+:: so the capture cannot be parsed without them.
 :: IL2CPPLAB_SYMBOLS_DIR is set by the workflow, which downloads the artifact.
 if defined IL2CPPLAB_SYMBOLS_DIR (
     if exist "%IL2CPPLAB_SYMBOLS_DIR%" (
@@ -368,7 +366,15 @@ if defined IL2CPPLAB_SYMBOLS_DIR (
         echo    WARNING: IL2CPPLAB_SYMBOLS_DIR is set but does not exist: %IL2CPPLAB_SYMBOLS_DIR%
     )
 ) else (
-    echo    No IL2CPPLAB_SYMBOLS_DIR set - the capture will upload without its symbols.
+    echo    No IL2CPPLAB_SYMBOLS_DIR set - the capture cannot be parsed.
+)
+
+:: parse and zip the profiler recording
+if defined IL2CPPLAB_TOOL_DIR (
+    python "%~dp0..\Analysis\parse_il2cpplab.py" "%IL2CPPLAB_LOCAL_DIR%" "%IL2CPPLAB_TOOL_DIR%"
+    if errorlevel 1 echo    WARNING: il2cpplab parse failed - uploading the raw capture instead.
+) else (
+    echo    No IL2CPPLAB_TOOL_DIR set - uploading the raw capture instead of a parsed db.
 )
 
 :: Pull the game logs folder from the headset into "Report Logs"
