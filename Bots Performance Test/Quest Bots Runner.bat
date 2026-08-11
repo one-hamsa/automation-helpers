@@ -38,10 +38,6 @@ if defined BOT_NUM_PC_BOTS (
 if defined BOT_COMMIT_SHA (set "COMMIT_SHA=!BOT_COMMIT_SHA!") else (set "COMMIT_SHA=")
 if defined BOT_COMMIT_REF (set "COMMIT_REF=!BOT_COMMIT_REF!") else (set "COMMIT_REF=")
 
-:: Optional frame-stamped gameplay video (set by Run Both Tests.bat, or arg 3 standalone). OFF by default.
-if defined BOT_RECORD_VIDEO (set "RECORD_VIDEO=!BOT_RECORD_VIDEO!") else (set "RECORD_VIDEO=%~3")
-if not "!RECORD_VIDEO!"=="1" set "RECORD_VIDEO=0"
-echo Record gameplay video: "!RECORD_VIDEO!"
 echo Folder name is: "!DRIVE_FOLDER_NAME!"
 echo Test started by: "!STARTED_BY!"
 echo Number of PC bots requested: "!NUM_PC_BOTS!"
@@ -207,8 +203,7 @@ adb shell monkey -p com.onehamsa.underdogs -c android.intent.category.LAUNCHER 1
 ping 127.0.0.1 -n 4 >nul
 
 
-::the unity profiler does not run, we have the new il2ccplab profiler
-
+:: Old unity profiler deprecated setup
 :: "C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
 
 
@@ -216,12 +211,7 @@ set "IL2CPPLAB_ROOT=/sdcard/Android/data/com.onehamsa.underdogs/files/il2cpplab"
 
 echo starting the 30 second il2cpplab CPU capture
 adb wait-for-device
-:: adb shell runs as uid shell with umask 007, so a plain mkdir/echo here leaves the
-:: root at 0770 and control.txt at 0660, both shell:ext_data_rw - and the game process
-:: is NOT in the ext_data_rw group, so it can neither enter the root nor read the file,
-:: and the capture never starts. chmod 2777 adds the o+rwx the game needs while keeping
-:: the setgid bit, so the session dir the game creates inherits group ext_data_rw and
-:: stays readable by adb pull; control.txt needs the same treatment after every write.
+
 adb shell "mkdir -p %IL2CPPLAB_ROOT% && chmod 2777 %IL2CPPLAB_ROOT%"
 adb shell "echo cap 200 > %IL2CPPLAB_ROOT%/control.txt"
 adb shell "echo start >> %IL2CPPLAB_ROOT%/control.txt"
@@ -243,19 +233,7 @@ echo    Taking screenshot 2 from headset...
 adb wait-for-device
 adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_2.png
 
-:: ---- simpleperf native sampling capture (native CPU hotspots; see Analysis\SIMPLEPERF_SETUP.md) ----
-:: Sequenced AFTER the Unity profiler recording so sampling overhead never contaminates the .raw.
-:: The ~20s capture fills the idle window before screenshot 3. Guarded: if the vendored simpleperf
-:: scripts aren't present it falls back to the original 30s idle, so this never breaks the run.
-set "SIMPLEPERF_APP=%~dp0..\Analysis\simpleperf\app_profiler.py"
-if exist "%SIMPLEPERF_APP%" (
-    echo    Capturing simpleperf native profile...
-    adb wait-for-device
-    python "%SIMPLEPERF_APP%" -p com.onehamsa.underdogs -r "-e cpu-cycles -f 1000 -g --duration 20" --disable_adb_root -o "%CURRENT_TEST_DIR%\perf.data"
-) else (
-    echo    simpleperf scripts not vendored ^(Analysis\simpleperf\^) - skipping native capture, idling instead.
-    ping 127.0.0.1 -n 31 >nul
-)
+ping 127.0.0.1 -n 21 >nul
 
 echo    Taking screenshot 3 from headset...
 adb wait-for-device
@@ -284,7 +262,7 @@ echo ...
 adb wait-for-device
 adb shell am force-stop com.oculus.ovrmonitormetricsservice
 
-ping 127.0.0.1 -n 21 >nul
+ping 127.0.0.1 -n 6 >nul
 
 :: ************************************************   9. DOWNLOADING THE CSV REPORT AND SCREENSHOT   ************************************************
 echo ...
@@ -299,22 +277,6 @@ if "%LATEST_FILE%"=="" (
 ) else (
     echo    Found: %LATEST_FILE%
 adb pull "%REMOTE_PATH%/%LATEST_FILE%" "%CURRENT_TEST_DIR%\CSV_REPORT.csv")
-
-:: Download the gameplay video (frame-stamped, syncs to the profiler capture), then delete it.
-:: The native recorder writes a timestamp-named file to VideoShots — grab the newest one.
-if not "!RECORD_VIDEO!"=="1" goto skip_video_pull
-echo    Downloading gameplay video...
-adb wait-for-device
-set "LATEST_VIDEO="
-for /f "delims=" %%F in ('adb shell "ls -t /sdcard/Oculus/VideoShots | head -n 1"') do set "LATEST_VIDEO=%%F"
-if "!LATEST_VIDEO!"=="" (
-    echo    WARNING: No gameplay video found on the headset!
-) else (
-    echo    Found: !LATEST_VIDEO!
-    adb pull "/sdcard/Oculus/VideoShots/!LATEST_VIDEO!" "%CURRENT_TEST_DIR%\GAMEPLAY_VIDEO.mp4"
-    adb shell rm "/sdcard/Oculus/VideoShots/!LATEST_VIDEO!"
-)
-:skip_video_pull
 
 :: Download the screenshots from the headset, then delete them
 echo    Downloading screenshots...

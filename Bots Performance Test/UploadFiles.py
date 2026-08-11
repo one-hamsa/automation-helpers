@@ -23,25 +23,23 @@ import subprocess
 from pathlib import Path
 import requests
 
-# Repo-relative path to the profiler/log parsers.
+# Repo-relative path to the log parser.
 # UploadFiles.py lives in <repo>/ci/Bots Performance Test/, parsers in <repo>/ci/Analysis/.
 PARSERS_DIR = Path(__file__).resolve().parent.parent / "Analysis"
 LOG_PARSER = PARSERS_DIR / "log_parser.py"
-PROFILER_PARSER = PARSERS_DIR / "profiler_parser.py"
-TAIL_REPORT = PARSERS_DIR / "tail_report.py"
-SIMPLEPERF_REPORT = PARSERS_DIR / "simpleperf_report.py"
+
+# Old unity profiler deprecated setup
+# PROFILER_PARSER = PARSERS_DIR / "profiler_parser.py"
 
 
 def run_parsers(test_dir, profiler_raw_path):
-    """Parse the bots-test log and profiler recording in-place.
+    """Parse the bots-test log in-place.
 
-    Outputs:
-      - Log parser writes <session>_log_findings.csv next to Global.json.log
-        (i.e. test_dir/Report Logs/<session>/).
-      - Profiler parser writes range_<a>-<b>_hierarchy.{csv,txt} next to the .raw
-        (i.e. test_dir/).
-    Profiler parser is invoked with no frame args, so it samples 10 evenly-spaced
-    frames and emits a single aggregated report.
+    Writes <session>_log_findings.csv next to Global.json.log
+    (i.e. test_dir/Report Logs/<session>/).
+
+    CPU profiling is il2cpplab, parsed by Analysis/parse_il2cpplab.py during the test
+    run; profiler_raw_path is the old editor-profiler recording and is no longer produced.
     """
     py = sys.executable or "python"
 
@@ -57,56 +55,20 @@ def run_parsers(test_dir, profiler_raw_path):
         except Exception as e:
             print(f"[PARSE] log_parser crashed: {e}")
 
-    # Unity Profiler .raw parsers. Both read the editor-profiler recording, so both are
-    # skipped when it is absent — the simpleperf report below reads perf.data instead and
-    # runs either way, so this block must not return.
-    if not profiler_raw_path or not os.path.isfile(profiler_raw_path):
-        print("[PARSE] No UNITY profiler recording to parse, skipping unity profiler parse.")
-    else:
-        if not PROFILER_PARSER.is_file():
-            print(f"[PARSE] profiler_parser.py not found at {PROFILER_PARSER}, skipping profiler parse.")
-        else:
-            print(f"[PARSE] Running profiler_parser on {profiler_raw_path}")
-            try:
-                subprocess.run(
-                    [py, str(PROFILER_PARSER), profiler_raw_path],
-                    check=False,
-                )
-            except Exception as e:
-                print(f"[PARSE] profiler_parser crashed: {e}")
-
-        # Tail-vs-median attribution — writes TAIL_REPORT.csv next to the .raw.
-        # Answers "which systems drive the slow frames" (p90/p95), which the aggregated
-        # profiler_parser dump cannot: it excludes wait/idle time and one-off stall frames
-        # so the tail band reflects real, recurring spike cost.
-        if not TAIL_REPORT.is_file():
-            print(f"[PARSE] tail_report.py not found at {TAIL_REPORT}, skipping tail report.")
-        else:
-            print(f"[PARSE] Running tail_report on {profiler_raw_path}")
-            try:
-                subprocess.run(
-                    [py, str(TAIL_REPORT), profiler_raw_path],
-                    check=False,
-                )
-            except Exception as e:
-                print(f"[PARSE] tail_report crashed: {e}")
-
-    # simpleperf native-sampling report — writes SIMPLEPERF_REPORT.csv next to perf.data.
-    # perf.data only exists when the .bat capture step ran (simpleperf scripts vendored);
-    # absent otherwise, so this is skipped on runs without the native capture.
-    # simpleperf_report.py itself exits 0 if the report lib isn't vendored or perf.data is
-    # empty, so this never fails the run. Tier-0 (per-DSO) needs no symbols; pass --symfs
-    # a binary_cache dir for Tier-1 function names (see SIMPLEPERF_SETUP.md).
-    perf_data = os.path.join(test_dir, "perf.data")
-    if os.path.isfile(perf_data) and SIMPLEPERF_REPORT.is_file():
-        print(f"[PARSE] Running simpleperf_report on {perf_data}")
-        try:
-            subprocess.run(
-                [py, str(SIMPLEPERF_REPORT), perf_data],
-                check=False,
-            )
-        except Exception as e:
-            print(f"[PARSE] simpleperf_report crashed: {e}")
+    # Old unity profiler deprecated setup
+    # if not profiler_raw_path or not os.path.isfile(profiler_raw_path):
+    #     print("[PARSE] No UNITY profiler recording to parse, skipping unity profiler parse.")
+    # elif not PROFILER_PARSER.is_file():
+    #     print(f"[PARSE] profiler_parser.py not found at {PROFILER_PARSER}, skipping profiler parse.")
+    # else:
+    #     print(f"[PARSE] Running profiler_parser on {profiler_raw_path}")
+    #     try:
+    #         subprocess.run(
+    #             [py, str(PROFILER_PARSER), profiler_raw_path],
+    #             check=False,
+    #         )
+    #     except Exception as e:
+    #         print(f"[PARSE] profiler_parser crashed: {e}")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -336,9 +298,7 @@ def upload_to_drive(test_dir, folderName):
     folder_id = create_drive_folder(service, folderName, DRIVE_PARENT_FOLDER_ID)
     drive_folder_link = f"https://drive.google.com/drive/folders/{folder_id}"
 
-    # .raw is the profiler recording, perf.data the simpleperf native capture — both
-    # large, Drive-only (never go to GitHub). Kept for offline symbolized re-analysis.
-    extensions = ("*.csv", "*.png", "*.raw", "*.mp4", "perf.data")
+    extensions = ("*.csv", "*.png")
     files_to_upload = []
     for ext in extensions:
         files_to_upload.extend(glob.glob(os.path.join(test_dir, ext)))
@@ -859,31 +819,30 @@ def main():
         if not has_thumbnail:
             print("[SCREENSHOT] No screenshots found (SCREENSHOT_1/2/3.png missing).")
 
-    # Check if the profiler .raw exists and has actual data.
-    # Move it into the test directory so it lives alongside the CSV/PNG/logs
-    # for this run (and won't be overwritten by the next run).
-    import shutil
-    profiler_src_path = r"E:\Automation\Profiler_Test_Result\ProfilerRecording.raw"
     profiler_raw_path = None
-    if os.path.isfile(profiler_src_path):
-        raw_size = os.path.getsize(profiler_src_path)
-        if raw_size >= 1 * 1024 * 1024:
-            profiler_dest_path = os.path.join(test_dir, "ProfilerRecording.raw")
-            try:
-                shutil.move(profiler_src_path, profiler_dest_path)
-                profiler_raw_path = profiler_dest_path
-                print(f"[PROFILER] Moved profiler recording into test folder: {profiler_dest_path} ({raw_size / (1024*1024):.1f} MB)")
-            except Exception as e:
-                print(f"[PROFILER] WARNING: Could not move profiler recording: {e}")
-                profiler_raw_path = profiler_src_path
-        else:
-            print(f"[PROFILER] Profiler recording is too small ({raw_size / (1024*1024):.2f} MB) — recording likely failed.")
-            print(f"  Hint: Check C:\\Automation\\UNDERDOGS Bots Automation\\Log Files\\unity_profiler.log for errors.")
-    else:
-        print(f"[PROFILER] No profiler recording found at {profiler_src_path}, skipping.")
 
-    # Parse log + profiler in-place so the resulting CSV/TXT files end up
-    # in the same folder as the source artifacts (and get uploaded with them).
+    # Old unity profiler deprecated setup
+    # import shutil
+    # profiler_src_path = r"E:\Automation\Profiler_Test_Result\ProfilerRecording.raw"
+    # if os.path.isfile(profiler_src_path):
+    #     raw_size = os.path.getsize(profiler_src_path)
+    #     if raw_size >= 1 * 1024 * 1024:
+    #         profiler_dest_path = os.path.join(test_dir, "ProfilerRecording.raw")
+    #         try:
+    #             shutil.move(profiler_src_path, profiler_dest_path)
+    #             profiler_raw_path = profiler_dest_path
+    #             print(f"[PROFILER] Moved profiler recording into test folder: {profiler_dest_path} ({raw_size / (1024*1024):.1f} MB)")
+    #         except Exception as e:
+    #             print(f"[PROFILER] WARNING: Could not move profiler recording: {e}")
+    #             profiler_raw_path = profiler_src_path
+    #     else:
+    #         print(f"[PROFILER] Profiler recording is too small ({raw_size / (1024*1024):.2f} MB) - recording likely failed.")
+    #         print(f"  Hint: Check C:\\Automation\\UNDERDOGS Bots Automation\\Log Files\\unity_profiler.log for errors.")
+    # else:
+    #     print(f"[PROFILER] No profiler recording found at {profiler_src_path}, skipping.")
+
+    # Parse the run's logs in-place so the resulting CSV ends up in the same folder
+    # as the source artifacts (and gets uploaded with them).
     run_parsers(test_dir, profiler_raw_path)
 
     # Extra dashboard metadata gathered from the run's logs.
@@ -926,8 +885,9 @@ def main():
             success = upload_to_github(test_dir, folderName, avg_fps, avg_app_time, mp4_drive_link, has_thumbnail, args.started_by, extra)
             if success:
                 print("[UPLOAD] GitHub upload success.")
-                if profiler_raw_path and os.path.isfile(profiler_raw_path):
-                    print(f"[PROFILER] Kept local profiler recording in test folder: {profiler_raw_path}")
+                # Old unity profiler deprecated setup
+                # if profiler_raw_path and os.path.isfile(profiler_raw_path):
+                #     print(f"[PROFILER] Kept local profiler recording in test folder: {profiler_raw_path}")
             else:
                 print("[UPLOAD] GitHub upload failed.")
         except Exception as e:

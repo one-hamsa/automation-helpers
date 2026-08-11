@@ -1,15 +1,13 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-:: Usage: "Run Both Tests.bat" <PC_BUILD_DIR> [DRIVE_FOLDER_NAME] [STARTED_BY] [NUMBER_OF_PC_BOTS] [COMMIT_SHA] [COMMIT_REF] [RECORD_VIDEO]
-:: RECORD_VIDEO: pass 1 to record a frame-stamped gameplay video on the headset (default off)
+:: Usage: "Run Both Tests.bat" <PC_BUILD_DIR> [DRIVE_FOLDER_NAME] [STARTED_BY] [NUMBER_OF_PC_BOTS] [COMMIT_SHA] [COMMIT_REF]
 set "PC_BUILD_DIR=%~1"
 set "DRIVE_FOLDER_NAME=%~2"
 set "STARTED_BY=%~3"
 set "NUMBER_OF_PC_BOTS=%~4"
 set "COMMIT_SHA=%~5"
 set "COMMIT_REF=%~6"
-set "RECORD_VIDEO=%~7"
 set "SYNC_DIR=%TEMP%\underdogs_bot_sync"
 
 if not defined PC_BUILD_DIR (
@@ -49,7 +47,6 @@ set "BOT_STARTED_BY=!STARTED_BY!"
 set "BOT_NUM_PC_BOTS=!NUMBER_OF_PC_BOTS!"
 set "BOT_COMMIT_SHA=!COMMIT_SHA!"
 set "BOT_COMMIT_REF=!COMMIT_REF!"
-set "BOT_RECORD_VIDEO=!RECORD_VIDEO!"
 
 :: Launch both runners in parallel.
 :: /B = no new window (avoids QuickEdit freezing when the window is clicked).
