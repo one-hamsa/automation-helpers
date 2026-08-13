@@ -849,7 +849,16 @@ def main():
     #  - bots_requested: PC bots requested + 1 for the XR/Quest bot.
     #  - bots_joined:    players that actually connected (XR + PC bots).
     #  - errors/exceptions: totals from the log parser's findings CSV.
+    #  - github_run_id:  the ONLY link back to the workflow run that produced this
+    #                    folder. 15OS's Builds console reads it to find a run's
+    #                    profiler capture on Drive; nothing else ties the two together,
+    #                    since the folder name carries just a test name and a runner-
+    #                    local timestamp and GitHub exposes neither for a run.
+    #                    Supplied by the Actions runner; absent when run by hand.
     extra = {}
+    github_run_id = os.environ.get("GITHUB_RUN_ID")
+    if github_run_id:
+        extra["github_run_id"] = github_run_id
     bots_joined = _count_bots_joined(test_dir)
     if bots_joined is not None:
         extra["bots_joined"] = bots_joined
