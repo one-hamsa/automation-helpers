@@ -99,20 +99,29 @@ Write-Host " === LAUNCHING BOTS === "
 Write-Host ""
 
 
-# Launch fresh bots via cmd's `start` (Start-Process trips SmartScreen on a
-# downloaded exe). 2s between launches to avoid file-lock conflicts.
+$nircmdPath = Join-Path $PSScriptRoot "SoundDisableHelper\nircmd.exe"
+
 if (Test-Path $exePath) {
     for ($i = 1; $i -le $InstanceCount; $i++) {
         Start-Sleep -Seconds 3
 
-	$logPath = "C:\Users\pigsys\Desktop\Bots Station\Logs\Bots Logs\bot_$i.log"
+        $logPath = "C:\Users\pigsys\Desktop\Bots Station\Logs\Bots Logs\bot_$i.log"
+        $argList = "-batchmode -nographics -logFile `"$logPath`""
 
-	Start-Process -FilePath $exePath `
-            -ArgumentList '-batchmode', '-nographics', '-noaudio', '-logFile', "`"$logPath`"" `
+        # Capture the specific process instance
+        $proc = Start-Process -FilePath $exePath `
+            -ArgumentList $argList `
             -WorkingDirectory $BuildDir `
-            -NoNewWindow
+            -NoNewWindow `
+            -PassThru
 
-        Write-Host "Launched instance $i/$InstanceCount"
+        # Allow Windows a brief moment to register the audio session
+        Start-Sleep -Milliseconds 500
+
+        # Mute ONLY the PID created in this iteration
+        & $nircmdPath muteappvolume "/$($proc.Id)" 1
+
+        Write-Host "Launched instance $i/$InstanceCount (PID: $($proc.Id))"
     }
 }
 Write-Host "=========================================================================================================================================================================================================="
