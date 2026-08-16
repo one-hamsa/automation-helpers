@@ -322,4 +322,3 @@ echo                  TEST COMPLETE
 echo    Files saved locally in: %CURRENT_TEST_DIR%
 echo    Files saved in google drive in: %DRIVE_FOLDER_NAME%
 echo ========================================================
-pause
