@@ -18,10 +18,14 @@ set "RENDERDOC_CMD=%APPDATA%\odh\packages\tools\renderdoc-oculus\renderdoccmd.ex
 :: we assign the variable to the parameter passed
 set "DRIVE_FOLDER_NAME=%~1"
 set "STARTED_BY=%~2"
+:: Commit/branch the build under test was made from (passed by the workflow; empty if standalone).
+set "COMMIT_SHA=%~3"
+set "COMMIT_REF=%~4"
 if not defined STARTED_BY set "STARTED_BY=unknown"
 if "%STARTED_BY%"=="" set "STARTED_BY=unknown"
 echo The parameter we received is: "%DRIVE_FOLDER_NAME%"
 echo Test started by: "%STARTED_BY%"
+echo Build commit: "%COMMIT_SHA%" ref: "%COMMIT_REF%"
 
 :: Get the date and time
 for /f "tokens=1-6 delims= " %%a in ('powershell -Command "Get-Date -format 'dd MM yy HH mm ss'"') do (
@@ -293,7 +297,7 @@ echo ...
 echo [8/9] Generating App GPU Time graph and uploading files...
 echo ...
 
-python "%~dp0UploadFiles.py" "%CURRENT_TEST_DIR%" "%DRIVE_FOLDER_NAME%" --started-by "%STARTED_BY%" --github-token "%AUTOMATION_REPOS_PAT%"
+python "%~dp0UploadFiles.py" "%CURRENT_TEST_DIR%" "%DRIVE_FOLDER_NAME%" --started-by "%STARTED_BY%" --commit-sha "%COMMIT_SHA%" --commit-ref "%COMMIT_REF%" --github-token "%AUTOMATION_REPOS_PAT%"
 
 :: ************************************************    RESETTING EVERYTHING BACK AGAIN   ************************************************
 

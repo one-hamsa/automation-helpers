@@ -400,7 +400,7 @@ def _parse_folder_name(folder_name):
     return test_name, scene_name, timestamp
 
 
-def _build_metadata(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown"):
+def _build_metadata(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     test_name, scene_name, timestamp = _parse_folder_name(folder_name)
 
     entry = {
@@ -414,21 +414,23 @@ def _build_metadata(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, 
     }
     if drive_link:
         entry["drive_link"] = drive_link
+    if extra:
+        entry.update(extra)
     return entry
 
 
-def _save_local_metadata(test_dir, folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown"):
+def _save_local_metadata(test_dir, folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Write metadata.json into the test folder on disk so it's readable offline."""
-    entry = _build_metadata(folder_name, avg_gpu, drive_link, has_thumbnail, started_by)
+    entry = _build_metadata(folder_name, avg_gpu, drive_link, has_thumbnail, started_by, extra)
     local_path = os.path.join(test_dir, "metadata.json")
     with open(local_path, "w", encoding="utf-8") as f:
         json.dump(entry, f, indent=2)
     print(f"  Saved local metadata: {local_path}")
 
 
-def _github_update_summary(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown"):
+def _github_update_summary(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Upload a metadata.json file into the test's folder."""
-    entry = _build_metadata(folder_name, avg_gpu, drive_link, has_thumbnail, started_by)
+    entry = _build_metadata(folder_name, avg_gpu, drive_link, has_thumbnail, started_by, extra)
 
     content = json.dumps(entry, indent=2)
     repo_path = f"AllTestRuns/{folder_name}/metadata.json"
@@ -448,7 +450,7 @@ def _github_update_summary(folder_name, avg_gpu, drive_link=None, has_thumbnail=
     print(f"  GitHub: Metadata uploaded — {folder_name} avg GPU: {gpu_str}")
 
 
-def upload_to_github(test_dir, folderName, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown"):
+def upload_to_github(test_dir, folderName, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Upload CSV and PNG to GitHub Pages and update the GPU summary."""
     print(f"[GITHUB] Uploading run: {folderName}")
 
@@ -502,10 +504,10 @@ def upload_to_github(test_dir, folderName, avg_gpu, drive_link=None, has_thumbna
         # Save locally first so the metadata lives alongside the run data
         # on disk even if the GitHub upload fails.
         try:
-            _save_local_metadata(test_dir, folderName, avg_gpu, drive_link, has_thumbnail, started_by)
+            _save_local_metadata(test_dir, folderName, avg_gpu, drive_link, has_thumbnail, started_by, extra)
         except Exception as e:
             print(f"  WARNING: Failed to save local metadata.json: {e}")
-        _github_update_summary(folderName, avg_gpu, drive_link, has_thumbnail, started_by)
+        _github_update_summary(folderName, avg_gpu, drive_link, has_thumbnail, started_by, extra)
     except Exception as e:
         print(f"  WARNING: Failed to update summary: {e}")
         failed.append("summary.json")
@@ -527,6 +529,8 @@ def main():
     parser.add_argument("--graph-only", action="store_true", help="Only generate graph")
     parser.add_argument("--upload-only", action="store_true", help="Only upload")
     parser.add_argument("--started-by", default="unknown", help="GitHub username who started the test")
+    parser.add_argument("--commit-sha", default="", help="Git commit SHA the build was made from")
+    parser.add_argument("--commit-ref", default="", help="Git branch/ref the build was made from")
     parser.add_argument("--github-token", default="",
                         help="PAT for the GitHub Pages repo (passed in from the workflow secret)")
     args = parser.parse_args()
@@ -614,6 +618,14 @@ def main():
         if not has_thumbnail:
             print("[SCREENSHOT] No screenshots found (SCREENSHOT_1/2/3.png missing).")
 
+    # Extra dashboard metadata: the commit / branch the build under test was made from.
+    # Empty when the test was run by hand rather than from the workflow.
+    extra = {}
+    if args.commit_sha:
+        extra["commit_sha"] = args.commit_sha
+    if args.commit_ref:
+        extra["commit_ref"] = args.commit_ref
+
     if do_upload:
         print("[UPLOAD] Uploading files to Google Drive...")
         try:
@@ -628,7 +640,7 @@ def main():
 
         print("[UPLOAD] Uploading files to GitHub Pages...")
         try:
-            success = upload_to_github(test_dir, folderName, avg_gpu, mp4_drive_link, has_thumbnail, args.started_by)
+            success = upload_to_github(test_dir, folderName, avg_gpu, mp4_drive_link, has_thumbnail, args.started_by, extra)
             if success:
                 print("[UPLOAD] GitHub upload success.")
             else:
