@@ -52,10 +52,12 @@ DRIVE_PARENT_FOLDER_ID = "1Ckhix2o8tbz3VA6i25UQ1jf7JKx5bkQD"
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
-# OAuth credentials — stored on the runner machine, NOT in the repo.
-RUNNER_AUTH_DIR = r"E:\Automation\UNDERDOGS Scene Test Automation\Runner"
-CREDENTIALS_FILE = os.path.join(RUNNER_AUTH_DIR, "credentials.json")
-TOKEN_FILE = os.path.join(RUNNER_AUTH_DIR, "token.json")
+# OAuth credentials come from the environment - the workflow step maps them in from
+# repo secrets, and the .bat inherits them. There is no on-disk fallback and no
+# interactive login, so a rebuilt runner needs no browser session to upload again.
+# token_uri is not a secret, just the fixed Google endpoint.
+DRIVE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+REQUIRED_DRIVE_VARS = ("GOOGLE_DRIVE_CLIENT_ID", "GOOGLE_DRIVE_CLIENT_SECRET", "GOOGLE_DRIVE_REFRESH_TOKEN")
 
 # GitHub Pages configuration
 # PAT is supplied only via the --github-token CLI arg (the .bat passes it,
@@ -149,33 +151,41 @@ def generate_graph(test_dir, folderName):
 
 
 # ---------------------------------------------------------------------------
-# Google Drive upload (OAuth2 with saved token)
+# Google Drive upload (OAuth2 refresh token from the environment)
 # ---------------------------------------------------------------------------
 def get_drive_service():
+    """Drive client, or None if it cannot be built - callers skip Drive and carry on
+    with the GitHub Pages upload rather than losing the whole run."""
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
 
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    values = {name: os.environ.get(name, "").strip() for name in REQUIRED_DRIVE_VARS}
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        # Names only - a value must never reach the log. All three missing means the
+        # secrets never reached this process; one missing means that name is misspelled.
+        print(f"  ERROR: Google Drive is not configured: {', '.join(missing)} unset.")
+        return None
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            print("  Refreshing expired token...")
-            creds.refresh(Request())
-        else:
-            if not os.path.exists(CREDENTIALS_FILE):
-                print(f"  ERROR: {CREDENTIALS_FILE} not found.")
-                return None
-            print("  No token found — opening browser for Google login...")
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
-
-        with open(TOKEN_FILE, "w") as f:
-            f.write(creds.to_json())
-        print(f"  Token saved to: {TOKEN_FILE}")
+    # No access token - the refresh below mints one. The stored access token was never
+    # worth keeping: it lives an hour, and google-auth refreshes on demand anyway.
+    creds = Credentials(
+        None,
+        refresh_token=values["GOOGLE_DRIVE_REFRESH_TOKEN"],
+        client_id=values["GOOGLE_DRIVE_CLIENT_ID"],
+        client_secret=values["GOOGLE_DRIVE_CLIENT_SECRET"],
+        token_uri=DRIVE_TOKEN_URI,
+        scopes=SCOPES,
+    )
+    try:
+        creds.refresh(Request())
+    except Exception as e:
+        # Usually an expired refresh token. Google drops them 7 days after issuance
+        # while the OAuth consent screen is in "Testing" status - say so, or the
+        # symptom is a bare 400 with no hint at what to fix.
+        print(f"  ERROR: Google Drive sign-in failed ({e}). The refresh token may need re-issuing.")
+        return None
 
     return build("drive", "v3", credentials=creds)
 
