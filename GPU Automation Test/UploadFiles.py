@@ -400,6 +400,29 @@ def _parse_folder_name(folder_name):
     return test_name, scene_name, timestamp
 
 
+def _write_ci_outputs(avg_gpu, folder_name):
+    """Append the run's average App GPU Time (microseconds) to GPU_METRICS_FILE so the
+    workflow can threshold-check it without re-reading the test folder. A file rather
+    than a step output because a sweep runs this script once per level, and a step
+    output would keep only the last level's number. Empty value = no metric produced.
+    No-op outside CI (env var unset), and never fails the run.
+    """
+    value = "" if avg_gpu is None else f"{avg_gpu:.0f}"
+
+    metrics_path = os.environ.get("GPU_METRICS_FILE")
+    if metrics_path:
+        # Label the row by scene, which is the level name on a sweep - the folder name
+        # itself carries a runner-local timestamp and reads badly in a notification.
+        test_name, scene_name, _ = _parse_folder_name(folder_name)
+        label = scene_name or test_name or "-"
+        try:
+            with open(metrics_path, "a", encoding="utf-8") as f:
+                f.write(f"{label}\t{value}\n")
+            print(f"[CI] Appended '{label}' metrics to {metrics_path}")
+        except Exception as e:
+            print(f"[CI] WARNING: Could not append run metrics: {e}")
+
+
 def _build_metadata(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     test_name, scene_name, timestamp = _parse_folder_name(folder_name)
 
@@ -567,6 +590,7 @@ def main():
             print("[GRAPH] Success.")
         else:
             print("[GRAPH] Failed.")
+        _write_ci_outputs(avg_gpu, folderName)
 
         # Quest screencap captures both eyes side-by-side and each eye is
         # tilted, so crop to left eye, rotate to straighten, then trim
