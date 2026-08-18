@@ -331,14 +331,6 @@ if defined IL2CPPLAB_SYMBOLS_DIR (
     echo    No IL2CPPLAB_SYMBOLS_DIR set - the capture cannot be parsed.
 )
 
-:: parse and zip the profiler recording
-if defined IL2CPPLAB_TOOL_DIR (
-    python "%~dp0..\Analysis\parse_il2cpplab.py" "%IL2CPPLAB_LOCAL_DIR%" "%IL2CPPLAB_TOOL_DIR%"
-    if errorlevel 1 echo    WARNING: il2cpplab parse failed - uploading the raw capture instead.
-) else (
-    echo    No IL2CPPLAB_TOOL_DIR set - uploading the raw capture instead of a parsed db.
-)
-
 :: Pull the game logs folder from the headset into "Report Logs"
 echo    Pulling game logs from headset...
 adb wait-for-device
@@ -346,6 +338,17 @@ adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_D
 if errorlevel 1 (
     echo Trying alternative path...
     adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
+)
+
+:: parse and zip the profiler recording. Runs after the game logs are pulled: the parse
+:: finds the run's log session in "Report Logs" beside the capture and attaches it into the
+:: db, which is where the viewer's Logs tab reads it from - the raw log folder is uploaded
+:: separately and is not what the profiler UI reads.
+if defined IL2CPPLAB_TOOL_DIR (
+    python "%~dp0..\Analysis\parse_il2cpplab.py" "%IL2CPPLAB_LOCAL_DIR%" "%IL2CPPLAB_TOOL_DIR%"
+    if errorlevel 1 echo    WARNING: il2cpplab parse failed - uploading the raw capture instead.
+) else (
+    echo    No IL2CPPLAB_TOOL_DIR set - uploading the raw capture instead of a parsed db.
 )
 
 

@@ -1,16 +1,26 @@
-"""Parse a pulled il2cpplab capture into a single il2cpplab.db, zip it, and delete the
-raw capture + symbols.
+"""Parse a pulled il2cpplab capture into il2cpplab.db, zip it with the capture's video,
+and delete the raw capture + symbols.
 
 Runs on the automation runner right after the capture is pulled, so a test run uploads
 one readable artifact instead of the capture files plus the ~2 GB symbol pair needed to
 read them. The db is self-contained: parsing resolves every site and stack frame to a
 name, so nothing downstream needs sites.db or libil2cpp.so again.
 
+video.mp4 rides in the same zip because it cannot be folded into the db: the viewer seeks
+it, and seeking an inter-frame-compressed stream means the decoder jumping to the keyframe
+before the target frame and decoding forward, which needs a real file. Zipping it neither
+shrinks nor degrades it - the headset's hardware encoder already produced a compressed
+stream, and this only packages the run as one artifact.
+
     parse_il2cpplab.py <capture_dir> <tool_dir> [--out ZIP]
 
 <capture_dir> is the flattened "C++ Profiler" folder (capture-*.alcz, modules.txt, and a
 "Symbol Parser" subfolder holding sites.db + the symbol artifact). <tool_dir> is the
 checked-out .claude/tools/il2cpplab from the build under test.
+
+The run's game log has to be on disk before this runs: il2cpplab's parse finds it beside
+the capture (the run's "Report Logs" folder) and attaches it into the db, which is where
+the viewer's Logs tab reads it from.
 
 Deletes nothing unless the parse and the zip both succeed - a failure here must leave the
 run's only copy of the capture on disk, so the raw files can still be uploaded and parsed
@@ -27,6 +37,10 @@ import zipfile
 from pathlib import Path
 
 SYMBOL_DIR_NAME = "Symbol Parser"
+# videolab's per-frame video, in the capture dir beside the capture files. Kept in the zip
+# next to the db, which is where the viewer needs it: it resolves a capture's video as
+# <captures dir>/<id>/video.mp4 and range-serves it to the browser's decoder.
+VIDEO_FILE_NAME = "video.mp4"
 # The platform symbol artifact il2cpplab resolves return addresses against, by the name
 # the build sidecar gives it. Android first: these runs are Quest captures.
 SYMBOL_ARTIFACTS = ("libil2cpp.so", "GameAssembly.pdb")
@@ -108,21 +122,33 @@ def main():
     print_degradations(db_path)
 
     db_mb = db_path.stat().st_size / (1024 * 1024)
+    video = capture_dir / VIDEO_FILE_NAME
     print(f"[IL2CPPLAB] Compressing {db_mb:.0f} MB db -> {out_zip.name}...")
     try:
         with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
             z.write(db_path, db_path.name)
+            if video.is_file():
+                video_mb = video.stat().st_size / (1024 * 1024)
+                print(f"[IL2CPPLAB] Adding {VIDEO_FILE_NAME} ({video_mb:.0f} MB, stored "
+                      "as-is - an encoded stream does not deflate)...")
+                z.write(video, video.name, compress_type=zipfile.ZIP_STORED)
+            else:
+                print(f"[IL2CPPLAB] no {VIDEO_FILE_NAME} in the capture - "
+                      "not a videoTracking build.")
     except OSError as e:
         print(f"[IL2CPPLAB] compression failed ({e}) - keeping the raw capture.")
         out_zip.unlink(missing_ok=True)
         db_path.unlink(missing_ok=True)
         return 1
     zip_mb = out_zip.stat().st_size / (1024 * 1024)
-    print(f"[IL2CPPLAB] {out_zip.name} ready ({zip_mb:.0f} MB, {zip_mb / db_mb:.0%} of the db).")
+    print(f"[IL2CPPLAB] {out_zip.name} ready ({zip_mb:.0f} MB).")
 
-    # Only now is the capture redundant: everything it carried is resolved into the db,
-    # and the db is safely inside the zip.
+    # Only now is the capture redundant: everything it carried is resolved into the db or
+    # copied into the zip (the video is the one file the db cannot absorb). il2cpplab's parse
+    # puts its own copy of the video beside the db it writes - that copy goes too, or it
+    # outlives the run as an unreferenced few hundred MB on the runner.
     db_path.unlink(missing_ok=True)
+    (db_path.parent / VIDEO_FILE_NAME).unlink(missing_ok=True)
     shutil.rmtree(capture_dir, ignore_errors=True)
     if capture_dir.exists():
         print(f"[IL2CPPLAB] WARNING: could not fully delete '{capture_dir}'.")
