@@ -141,21 +141,21 @@ echo ...
 
 ping 127.0.0.1 -n 61 >nul
 
-:: ************************************************ 4. LOCKING HARDWARE PERFORMANCE   ************************************************
+:: ************************************************ 4. RELEASING HARDWARE PERFORMANCE   ************************************************
 echo ...
-echo [4/9] Forcing OS-level performance locks...
+echo [4/9] making sure the quest is on a free performance state...
 echo ...
 
 adb wait-for-device
-:: Lock CPU and GPU to level 3 (Sustained High) to prevent frequency bouncing
-adb shell setprop debug.oculus.cpuLevel 3
-adb shell setprop debug.oculus.gpuLevel 3
+:: release the cpu/gpu locks
+adb shell setprop debug.oculus.cpuLevel -1
+adb shell setprop debug.oculus.gpuLevel -1
 
-:: Turn off dynamic foveation and lock the foveation level
-adb shell setprop debug.oculus.foveation.dynamic 0
-adb shell setprop debug.oculus.foveation.level 3
+:: hand foveation back to the OS
+adb shell setprop debug.oculus.foveation.dynamic 1
+adb shell setprop debug.oculus.foveation.level -1
 
-:: Give the OS a few seconds to apply the locks
+:: Give the OS a few seconds to apply the change
 ping 127.0.0.1 -n 4 >nul
 
 :: ************************************************   5. RECORDING PERFORMANCE   ************************************************
