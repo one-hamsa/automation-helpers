@@ -6,6 +6,7 @@ set "PATH=C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Data\PlaybackEngi
 
 :: --- CONFIGURATION START ---
 set "ROOT_DIR=E:\Automation\UNDERDOGS Bots Automation\Tests Data"
+set "LOG_FILES_DIR=E:\Automation\UNDERDOGS Bots Automation\Log Files"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
 set "SYNC_DIR=%TEMP%\underdogs_bot_sync"
 :: --- CONFIGURATION END ---
@@ -93,6 +94,12 @@ if errorlevel 1 (
     exit /b 1
 )
 echo ADB device connected.
+
+:: Grow the logcat ring and clear it, so the whole run fits and nothing from a previous
+:: run is in it. This is where the game's native profiler diagnostics land (tag
+:: "il2cpplab"), plus Unity and system messages - dumped to Log Files at the end.
+adb logcat -G 16M >nul 2>&1
+adb logcat -c >nul 2>&1
 
 ::wake up the headset, disable the proximity censor and disable the guardian
 adb wait-for-device
@@ -338,6 +345,19 @@ adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_D
 if errorlevel 1 (
     echo Trying alternative path...
     adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
+)
+
+:: Dump the device log next to quest_output.log. Read at the end rather than streamed:
+:: the game is already force-stopped, so the ring holds the whole run and there is no
+:: background process to orphan. Overwritten each run, like the other Log Files entries.
+echo    Dumping logcat to "%LOG_FILES_DIR%\logcat.log"...
+if not exist "%LOG_FILES_DIR%" mkdir "%LOG_FILES_DIR%"
+adb wait-for-device
+adb logcat -b all -d -v threadtime > "%LOG_FILES_DIR%\logcat.log" 2>&1
+if errorlevel 1 (
+    echo    WARNING: logcat dump failed.
+) else (
+    for %%L in ("%LOG_FILES_DIR%\logcat.log") do echo    logcat.log: %%~zL bytes
 )
 
 :: parse and zip the profiler recording. Runs after the game logs are pulled: the parse
