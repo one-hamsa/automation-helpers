@@ -232,6 +232,16 @@ adb shell "echo stop > %IL2CPPLAB_ROOT%/control.txt"
 adb shell "chmod 666 %IL2CPPLAB_ROOT%/control.txt"
 :: let the writer flush and close the session files before the game is force-stopped
 ping 127.0.0.1 -n 4 >nul
+
+:: Ask the game for an in-game report. The flush is the point, not the upload: ZLogger's
+:: writer sleeps per entry (~10 entries/s in builds), so the capture window's log entries
+:: are still queued when the game is force-stopped below and die with it. The report drains
+:: that backlog onto disk, so the "Logs" pull further down gets a complete session and the
+:: profiler can place entries on real frames. Capped at 5s inside the game, hence this wait.
+echo    asking the game to report (flushes the log backlog to disk)...
+adb shell "echo report > %IL2CPPLAB_ROOT%/control.txt"
+adb shell "chmod 666 %IL2CPPLAB_ROOT%/control.txt"
+ping 127.0.0.1 -n 16 >nul
 :: shows up in the log when the capture root is wrong (internal storage) or the build isn't a tracking build
 echo il2cpplab sessions on the device:
 adb shell "ls -l %IL2CPPLAB_ROOT%"
