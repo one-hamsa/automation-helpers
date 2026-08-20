@@ -158,11 +158,9 @@ adb shell setprop debug.oculus.cpuLevel 4
 adb shell setprop debug.oculus.gpuLevel 5
 
 :: Turn off dynamic foveation and lock the foveation level
-adb shell setprop debug.oculus.foveation.dynamic 1
-adb shell setprop debug.oculus.foveation.level -1
+adb shell setprop debug.oculus.foveation.dynamic 0
+adb shell setprop debug.oculus.foveation.level 0
 
-:: Give the OS a few seconds to apply the locks
-ping 127.0.0.1 -n 4 >nul
 :: ************************************************   3. LAUNCHING GAME   ************************************************
 echo ...
 echo [3/10] Launching Underdogs...
@@ -204,11 +202,6 @@ ping 127.0.0.1 -n 31 >nul
 echo preparing the CPU performance capture
 adb wait-for-device
 adb shell input keyevent KEYCODE_WAKEUP
-
-
-adb shell monkey -p com.onehamsa.underdogs -c android.intent.category.LAUNCHER 1
-ping 127.0.0.1 -n 4 >nul
-
 
 :: Old unity profiler deprecated setup
 :: "C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Unity.exe" -batchmode -projectPath "E:\Automation\Profiler-Project" -executeMethod AutoProfiler.Record -logFile "E:\Automation\UNDERDOGS Bots Automation\Log Files\unity_profiler.log"
