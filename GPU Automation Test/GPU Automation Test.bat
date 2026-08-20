@@ -117,9 +117,26 @@ adb wait-for-device
 adb shell am start omms://app
 ping 127.0.0.1 -n 5 >nul
 
-:: ************************************************   2. LAUNCHING GAME (metrics phase - NO RenderDoc)   ************************************************
+
+:: ************************************************ 2. LOCKING HARDWARE PERFORMANCE   ************************************************
 echo ...
-echo [2/9] Launching Underdogs normally for the metrics run...
+echo [2/9] making sure the quest is on a free performance state...
+echo ...
+
+adb wait-for-device
+:: release the cpu, lock gpu to 5
+adb shell setprop debug.oculus.cpuLevel -1
+adb shell setprop debug.oculus.gpuLevel 5
+
+:: hand foveation back to the OS
+adb shell setprop debug.oculus.foveation.dynamic 1
+adb shell setprop debug.oculus.foveation.level -1
+
+:: Give the OS a few seconds to apply the change
+ping 127.0.0.1 -n 4 >nul
+:: ************************************************   3. LAUNCHING GAME (metrics phase - NO RenderDoc)   ************************************************
+echo ...
+echo [3/9] Launching Underdogs normally for the metrics run...
 echo ...
 
 :: PHASE 1 is a normal, RenderDoc-free run. The Oculus GPU profiler (enabled in step 1) and RenderDoc's
@@ -134,29 +151,14 @@ ping 127.0.0.1 -n 6 >nul
 adb wait-for-device
 adb shell monkey -p com.onehamsa.underdogs -c android.intent.category.LAUNCHER 1
 
-:: ************************************************   3. WAITING FOR THE GAME TO LOAD   ************************************************
+:: ************************************************   4. WAITING FOR THE GAME TO LOAD   ************************************************
 echo ...
-echo [3/9] Waiting a minute for the game to fully load...
+echo [4/9] Waiting a minute for the game to fully load...
 echo ...
 
 ping 127.0.0.1 -n 61 >nul
 
-:: ************************************************ 4. RELEASING HARDWARE PERFORMANCE   ************************************************
-echo ...
-echo [4/9] making sure the quest is on a free performance state...
-echo ...
 
-adb wait-for-device
-:: release the cpu/gpu locks
-adb shell setprop debug.oculus.cpuLevel -1
-adb shell setprop debug.oculus.gpuLevel -1
-
-:: hand foveation back to the OS
-adb shell setprop debug.oculus.foveation.dynamic 1
-adb shell setprop debug.oculus.foveation.level -1
-
-:: Give the OS a few seconds to apply the change
-ping 127.0.0.1 -n 4 >nul
 
 :: ************************************************   5. RECORDING PERFORMANCE   ************************************************
 echo ...
