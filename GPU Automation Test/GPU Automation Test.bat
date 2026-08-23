@@ -11,6 +11,9 @@ set "PATH=%ANDROID_SDK_ROOT%\platform-tools;%PATH%"
 :: --- CONFIGURATION START ---
 set "ROOT_DIR=E:\Automation\UNDERDOGS Scene Test Automation\Tests Data"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
+:: The game polls this file (AutomationControl) and acts on the word in it: "report" sends an
+:: in-game report, "quit" quits the app.
+set "AUTOMATION_CONTROL=/sdcard/Android/data/com.onehamsa.underdogs/files/automationControl.txt"
 :: RenderDoc Meta fork (bundled with Quest Developer Hub). %APPDATA% avoids hardcoding the username.
 set "RENDERDOC_CMD=%APPDATA%\odh\packages\tools\renderdoc-oculus\renderdoccmd.exe"
 :: --- CONFIGURATION END ---
@@ -143,6 +146,10 @@ echo ...
 :: capture layer both hook the GPU driver and cannot coexist: RenderDoc disables ovrgpuprofiler on inject,
 :: which starves the OVR Metrics Tool of App GPU Time data. So metrics come from this clean launch; the
 :: RenderDoc capture happens in a SEPARATE launch afterwards (phase 2, step 7).
+
+:: A word left over from a previous run would be acted on seconds after this launch.
+adb shell "rm -f %AUTOMATION_CONTROL%"
+
 adb wait-for-device
 adb shell am start -n com.onehamsa.underdogs/com.unity3d.player.UnityPlayerActivity
 
@@ -188,11 +195,44 @@ echo ...
 echo [6/9] Stopping OVR metrics and game, then pulling CSV / screenshots / logs...
 echo ...
 
-:: Phase 1 is done: stop the metrics tool (ends CSV recording) and the game.
+:: Phase 1 is done: stop the metrics tool (ends CSV recording), then end the game session.
 adb wait-for-device
 adb shell am force-stop com.oculus.ovrmonitormetricsservice
 ping 127.0.0.1 -n 3 >nul
-adb shell am force-stop com.onehamsa.underdogs
+
+:: This session is the one whose log we want, so it reports before it goes: ZLogger's writer
+:: sleeps per entry in builds, and a force-stop takes whatever is still queued with it. The
+:: report drains the backlog to disk and uploads to the cloud; the RenderDoc relaunch below
+:: then turns that complete session into a .udlog, which is what the pull at the end collects.
+:: The RenderDoc session does NOT report - it exists to produce the capture, not a log.
+echo    asking the game to report (flushes the log backlog to disk)...
+adb shell "echo report > %AUTOMATION_CONTROL%"
+adb shell "chmod 666 %AUTOMATION_CONTROL%"
+ping 127.0.0.1 -n 16 >nul
+
+:: Quit through the game rather than force-stopping it: the report is still zipping and
+:: uploading, and the game holds its own quit until that drains (up to 15s). Force-stop is the
+:: fallback if it hangs.
+echo    asking the game to quit...
+adb shell "echo quit > %AUTOMATION_CONTROL%"
+adb shell "chmod 666 %AUTOMATION_CONTROL%"
+
+echo    waiting up to 30s for the game to close itself...
+set "GAME_CLOSED="
+for /l %%i in (1,1,15) do (
+    if not defined GAME_CLOSED (
+        ping 127.0.0.1 -n 3 >nul
+        set "GAME_PID="
+        for /f "delims=" %%p in ('adb shell pidof com.onehamsa.underdogs 2^>nul') do set "GAME_PID=%%p"
+        if not defined GAME_PID set "GAME_CLOSED=1"
+    )
+)
+if defined GAME_CLOSED (
+    echo    game exited on its own.
+) else (
+    echo    WARNING: game still running after 30s - force-stopping, the report upload may be lost.
+    adb shell am force-stop com.onehamsa.underdogs
+)
 ping 127.0.0.1 -n 6 >nul
 
 :: --- CSV report ---
@@ -217,20 +257,7 @@ adb shell rm /sdcard/AUTOMATION_SCREENSHOT_3.png
 
 ping 127.0.0.1 -n 4 >nul
 
-:: --- Game logs ---
-:: Pull the whole Logs folder into a NON-existent "Report Logs" so adb renames it to the destination
-:: (contents land directly in "Report Logs\<session>\Global.json.log"). Pre-creating the dir or appending
-:: "/." makes newer/RenderDoc-forked adb pull nothing. The /sdcard path is the accessible one; the
-:: /data/user fallback needs root (usually denied).
-echo    Pulling game logs from headset...
-adb wait-for-device
-adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
-if errorlevel 1 (
-    echo Trying alternative path...
-    adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
-)
-
-ping 127.0.0.1 -n 4 >nul
+:: Logs are pulled once, after the RenderDoc phase - see step 7.
 
 :: ************************************************   7. RENDERDOC CAPTURE (phase 2 - separate launch)   ************************************************
 echo ...
@@ -250,6 +277,10 @@ echo Device serial: %SERIAL%
 :: RenderDoc can only capture an app it LAUNCHED itself (no attach-to-running on Quest). Requires a
 :: DEVELOPMENT build (android:debuggable=true). adb-launch force-stops, relaunches with the capture
 :: layer injected, and returns an "ident" used by the capture below.
+:: If phase 1 had to be force-stopped, its "quit" was never consumed - and this relaunch would
+:: act on it and exit before the capture. The RenderDoc session takes no commands.
+adb shell "rm -f %AUTOMATION_CONTROL%"
+
 set "RD_LAUNCH_LOG=%CURRENT_TEST_DIR%\renderdoc_launch.json"
 "%RENDERDOC_CMD%" adb-launch --device %SERIAL% --package com.onehamsa.underdogs --skip-controller-check > "%RD_LAUNCH_LOG%" 2>&1
 type "%RD_LAUNCH_LOG%"
@@ -284,14 +315,18 @@ adb wait-for-device
 adb shell am force-stop com.onehamsa.underdogs
 ping 127.0.0.1 -n 6 >nul
 
-:: Pull the RenderDoc-phase game logs too. The step-6 pull happened BEFORE this relaunch, so it only has the
-:: metrics phase; without this we can't see why the RenderDoc capture landed on "Connecting" vs in-scene.
-:: Separate folder so it doesn't collide with the metrics-phase "Report Logs".
+:: One pull for both sessions, here at the end: the metrics session reported before it quit, so this
+:: relaunch zipped it into <session>.udlog, and the RenderDoc session's own log dir sits beside it -
+:: which is what tells us whether the capture landed in-scene or on "Connecting".
+:: Pull into a NON-existent "Report Logs" so adb renames it to the destination (contents land directly
+:: in "Report Logs\<session>"). Pre-creating the dir or appending "/." makes newer/RenderDoc-forked adb
+:: pull nothing. The /sdcard path is the accessible one; the /data/user fallback needs root.
+echo    Pulling game logs from headset...
 adb wait-for-device
-adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs RenderDoc"
+adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
 if errorlevel 1 (
     echo Trying alternative path...
-    adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs RenderDoc"
+    adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
 )
 
 :: ************************************************   8. GENERATE GRAPH AND UPLOAD FILES   ************************************************

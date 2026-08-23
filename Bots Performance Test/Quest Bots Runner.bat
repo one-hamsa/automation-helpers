@@ -8,6 +8,10 @@ set "PATH=C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Data\PlaybackEngi
 set "ROOT_DIR=E:\Automation\UNDERDOGS Bots Automation\Tests Data"
 set "LOG_FILES_DIR=E:\Automation\UNDERDOGS Bots Automation\Log Files"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
+:: The game polls this file (AutomationControl) and acts on the word in it: "report" sends an
+:: in-game report, "quit" quits the app. Any development build reads it - unlike the il2cpplab
+:: profiler channel further down, which only exists in a tracking build.
+set "AUTOMATION_CONTROL=/sdcard/Android/data/com.onehamsa.underdogs/files/automationControl.txt"
 set "SYNC_DIR=%TEMP%\underdogs_bot_sync"
 :: --- CONFIGURATION END ---
 
@@ -166,6 +170,9 @@ echo ...
 echo [3/10] Launching Underdogs...
 echo ...
 
+:: A word left over from a previous run would be acted on seconds after this launch.
+adb shell "rm -f %AUTOMATION_CONTROL%"
+
 adb wait-for-device
 adb shell am start -n com.onehamsa.underdogs/com.unity3d.player.UnityPlayerActivity
 
@@ -213,27 +220,27 @@ echo starting the 30 second il2cpplab CPU capture
 adb wait-for-device
 
 adb shell "mkdir -p %IL2CPPLAB_ROOT% && chmod 2777 %IL2CPPLAB_ROOT%"
-adb shell "echo cap 200 > %IL2CPPLAB_ROOT%/control.txt"
-adb shell "echo start >> %IL2CPPLAB_ROOT%/control.txt"
-adb shell "chmod 666 %IL2CPPLAB_ROOT%/control.txt"
+adb shell "echo cap 200 > %IL2CPPLAB_ROOT%/profilerControl.txt"
+adb shell "echo start >> %IL2CPPLAB_ROOT%/profilerControl.txt"
+adb shell "chmod 666 %IL2CPPLAB_ROOT%/profilerControl.txt"
 
 ping 127.0.0.1 -n 31 >nul
 
 echo stopping the il2cpplab capture
 adb wait-for-device
-adb shell "echo stop > %IL2CPPLAB_ROOT%/control.txt"
-adb shell "chmod 666 %IL2CPPLAB_ROOT%/control.txt"
+adb shell "echo stop > %IL2CPPLAB_ROOT%/profilerControl.txt"
+adb shell "chmod 666 %IL2CPPLAB_ROOT%/profilerControl.txt"
 :: let the writer flush and close the session files before the game is force-stopped
 ping 127.0.0.1 -n 4 >nul
 
-:: Ask the game for an in-game report. The flush is the point, not the upload: ZLogger's
-:: writer sleeps per entry (~10 entries/s in builds), so the capture window's log entries
-:: are still queued when the game is force-stopped below and die with it. The report drains
-:: that backlog onto disk, so the "Logs" pull further down gets a complete session and the
-:: profiler can place entries on real frames. Capped at 5s inside the game, hence this wait.
+:: Ask the game for an in-game report. ZLogger's writer sleeps per entry (~10 entries/s in
+:: builds), so the capture window's log entries are still queued at this point and a
+:: force-stop would take them with it. The report drains that backlog onto disk, so the
+:: "Logs" pull further down gets a complete session and the profiler can place entries on
+:: real frames - and the report itself reaches the cloud. Capped at 5s inside the game.
 echo    asking the game to report (flushes the log backlog to disk)...
-adb shell "echo report > %IL2CPPLAB_ROOT%/control.txt"
-adb shell "chmod 666 %IL2CPPLAB_ROOT%/control.txt"
+adb shell "echo report > %AUTOMATION_CONTROL%"
+adb shell "chmod 666 %AUTOMATION_CONTROL%"
 ping 127.0.0.1 -n 16 >nul
 :: shows up in the log when the capture root is wrong (internal storage) or the build isn't a tracking build
 echo il2cpplab sessions on the device:
@@ -256,8 +263,31 @@ echo ...
 echo [6/10] Stopping Game...
 echo ...
 
+:: Quit through the game, not with force-stop: the report queued above is still zipping and
+:: uploading, and the game holds its own quit until that drains (up to 15s) before exiting.
+:: A force-stop here would kill the upload mid-flight, and the report would only be retried on
+:: a later launch - landing under the wrong run. Force-stop is the fallback if it hangs.
 adb wait-for-device
-adb shell am force-stop com.onehamsa.underdogs
+echo    asking the game to quit...
+adb shell "echo quit > %AUTOMATION_CONTROL%"
+adb shell "chmod 666 %AUTOMATION_CONTROL%"
+
+echo    waiting up to 30s for the game to close itself...
+set "GAME_CLOSED="
+for /l %%i in (1,1,15) do (
+    if not defined GAME_CLOSED (
+        ping 127.0.0.1 -n 3 >nul
+        set "GAME_PID="
+        for /f "delims=" %%p in ('adb shell pidof com.onehamsa.underdogs 2^>nul') do set "GAME_PID=%%p"
+        if not defined GAME_PID set "GAME_CLOSED=1"
+    )
+)
+if defined GAME_CLOSED (
+    echo    game exited on its own.
+) else (
+    echo    WARNING: game still running after 30s - force-stopping, the report upload may be lost.
+    adb shell am force-stop com.onehamsa.underdogs
+)
 
 :: Signal that the game has stopped
 echo stopped > "%SYNC_DIR%\GAME_STOPPED"

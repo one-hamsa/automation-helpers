@@ -27,9 +27,10 @@ import requests
 # UploadFiles.py lives in <repo>/GPU Automation Test/, the parser in <repo>/Analysis/.
 LOG_PARSER = Path(__file__).resolve().parent.parent / "Analysis" / "log_parser.py"
 
-# Game-log folders the .bat pulls off the headset — one per app launch: the metrics
-# phase and the RenderDoc phase. Both get uploaded to Drive and GitHub Pages.
-REPORT_LOGS_DIRS = ("Report Logs", "Report Logs RenderDoc")
+# Game-log folder the .bat pulls off the headset, once, after both app launches: it holds the
+# metrics session as a .udlog (it reported before quitting, and the RenderDoc relaunch zipped
+# it) plus the RenderDoc session's own log dir. Uploaded to Drive and GitHub Pages.
+REPORT_LOGS_DIRS = ("Report Logs",)
 
 
 def run_log_parser(test_dir):
@@ -387,6 +388,48 @@ def _github_upload_file(local_path, repo_path):
     print(f"  GitHub: Uploaded {repo_path}")
 
 
+def rename_renderdoc_capture(test_dir, folder_name):
+    """Rename the run's RenderDoc capture to RenderDoc_<scene>.rdc.
+
+    RenderDoc names a capture after the app, the wall clock and the frame it caught
+    (com.onehamsa.underdogs_2026.08.22_05.29_frame1381.rdc), so nothing downstream can
+    predict it. A fixed name is what lets 15OS's RenderDoc button hand you a file whose
+    name says which scene it came from, and it reads the same way in Drive.
+
+    Best-effort: a run with no capture (the RenderDoc phase never got that far) just
+    logs and carries on — the rest of the upload is still worth doing.
+    """
+    captures = sorted(glob.glob(os.path.join(test_dir, "*.rdc")))
+    if not captures:
+        print("[RENDERDOC] No .rdc capture in the test folder - nothing to rename.")
+        return
+
+    _, scene_name, _ = _parse_folder_name(folder_name)
+    scene = (scene_name or "").strip()
+    # Strip only what a filename cannot hold; spaces stay, so "Cage Twins" reads as it does
+    # everywhere else in this system.
+    safe = re.sub(r'[<>:"/\\|?*]', "", scene).strip()
+    if not safe or safe == "-":
+        safe = "Unknown"
+
+    src = captures[0]
+    if len(captures) > 1:
+        print(f"[RENDERDOC] WARNING: {len(captures)} .rdc files present, renaming the first: {os.path.basename(src)}")
+    target = os.path.join(test_dir, f"RenderDoc_{safe}.rdc")
+    if os.path.abspath(src) == os.path.abspath(target):
+        print(f"[RENDERDOC] Capture already named {os.path.basename(target)}.")
+        return
+
+    try:
+        # A re-run of the same scene into the same folder would otherwise fail the rename.
+        if os.path.exists(target):
+            os.remove(target)
+        os.rename(src, target)
+        print(f"[RENDERDOC] Renamed {os.path.basename(src)} -> {os.path.basename(target)}")
+    except OSError as e:
+        print(f"[RENDERDOC] WARNING: Could not rename {os.path.basename(src)}: {e}")
+
+
 def _parse_folder_name(folder_name):
     """Parse test name, scene, and timestamp from the folder name.
     Expected format: GPU TEST - Name(TestName) - On Scene(SceneName) - Started at( timestamp )
@@ -652,9 +695,20 @@ def main():
         if not has_thumbnail:
             print("[SCREENSHOT] No screenshots found (SCREENSHOT_1/2/3.png missing).")
 
-    # Extra dashboard metadata: the commit / branch the build under test was made from.
+    # Give the capture a predictable name before anything uploads it, so both Drive
+    # and this folder on disk carry the same one.
+    rename_renderdoc_capture(test_dir, folderName)
+
+    # Extra dashboard metadata:
+    #  - commit / branch the build under test was made from
+    #  - github_run_id: the ONLY link back to the workflow run that produced this
+    #    folder. 15OS's Builds console resolves a run's RenderDoc capture through it
+    #    (same as the bots test's profiler db), and a sweep's folders all share it.
     # Empty when the test was run by hand rather than from the workflow.
     extra = {}
+    github_run_id = os.environ.get("GITHUB_RUN_ID")
+    if github_run_id:
+        extra["github_run_id"] = github_run_id
     if args.commit_sha:
         extra["commit_sha"] = args.commit_sha
     if args.commit_ref:
