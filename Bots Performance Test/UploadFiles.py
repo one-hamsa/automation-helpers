@@ -17,9 +17,12 @@ import csv
 import glob
 import json
 import base64
+import io
 import re
+import zipfile
 import argparse
 import subprocess
+import time
 from pathlib import Path
 import requests
 
@@ -427,91 +430,93 @@ def upload_cpp_profiler_to_drive(service, test_dir, run_folder_id):
 # ---------------------------------------------------------------------------
 # GitHub Pages upload
 # ---------------------------------------------------------------------------
-def _github_get_file_sha(repo_path):
-    """Get the SHA of an existing file (needed for updates)."""
-    r = requests.get(f"{GITHUB_API_BASE}/{repo_path}", headers=GITHUB_HEADERS)
-    if r.status_code == 200:
-        return r.json()["sha"]
-    return None
+# The dashboard only ever reads the current tree, but git keeps every blob it has
+# ever seen — so whatever we upload today is repo weight forever. Two rules follow:
+#   * shrink before uploading: screenshots go up as WebP (~20x smaller than the
+#     Quest PNG, alpha intact) and Report Logs as one zip (~16x). Google Drive
+#     still gets the full-size originals.
+#   * one commit per run, via the Git Data API. The Contents API can only touch
+#     one path per call, which cost a commit per file (~150 per run).
+GITHUB_REPO_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+SCREENSHOT_WEBP_QUALITY = 85
+SCREENSHOT_PNG = re.compile(r"^SCREENSHOT_\d+\.png$", re.IGNORECASE)
 
 
-def _github_upload_file(local_path, repo_path):
-    """Upload or update a single file in the GitHub repo.
-    Uses the Git Blobs API for files over 25MB (Contents API limit).
-    """
-    file_size = os.path.getsize(local_path)
+def _webp_bytes(png_path):
+    """Re-encode a screenshot as WebP for the dashboard thumbnails."""
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.open(png_path).save(buf, "WEBP", quality=SCREENSHOT_WEBP_QUALITY, method=4)
+    return buf.getvalue()
 
-    # For files under 25MB, use the simple Contents API
-    if file_size < 25 * 1024 * 1024:
-        with open(local_path, "rb") as f:
-            content = base64.b64encode(f.read()).decode()
 
-        sha = _github_get_file_sha(repo_path)
-        payload = {
-            "message": f"Add {repo_path}",
-            "content": content,
-            "branch": GITHUB_BRANCH,
-        }
-        if sha:
-            payload["sha"] = sha
+def _zip_bytes(root_dir):
+    """Zip a directory tree, preserving paths relative to root_dir."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for dirpath, _, filenames in os.walk(root_dir):
+            for fname in filenames:
+                full = os.path.join(dirpath, fname)
+                z.write(full, os.path.relpath(full, root_dir).replace("\\", "/"))
+    return buf.getvalue()
 
-        r = requests.put(f"{GITHUB_API_BASE}/{repo_path}", headers=GITHUB_HEADERS, json=payload)
-        r.raise_for_status()
-        print(f"  GitHub: Uploaded {repo_path}")
-        return
 
-    # For large files, use the Git Data API (blobs + trees + commits)
-    repo_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
-
-    # Step 1: Create a blob with the file content
-    print(f"  GitHub: Large file ({file_size / (1024*1024):.1f} MB), using Git Blobs API...")
-    with open(local_path, "rb") as f:
-        content = base64.b64encode(f.read()).decode()
-
-    r = requests.post(f"{repo_url}/git/blobs", headers=GITHUB_HEADERS, json={
-        "content": content,
-        "encoding": "base64"
+def _github_create_blob(data):
+    """Upload one file's bytes as a git blob; returns its SHA."""
+    r = requests.post(f"{GITHUB_REPO_URL}/git/blobs", headers=GITHUB_HEADERS, json={
+        "content": base64.b64encode(data).decode(),
+        "encoding": "base64",
     })
     r.raise_for_status()
-    blob_sha = r.json()["sha"]
+    return r.json()["sha"]
 
-    # Step 2: Get the current commit SHA and tree SHA for the branch
-    r = requests.get(f"{repo_url}/git/ref/heads/{GITHUB_BRANCH}", headers=GITHUB_HEADERS)
-    r.raise_for_status()
-    current_commit_sha = r.json()["object"]["sha"]
 
-    r = requests.get(f"{repo_url}/git/commits/{current_commit_sha}", headers=GITHUB_HEADERS)
-    r.raise_for_status()
-    base_tree_sha = r.json()["tree"]["sha"]
+def _github_commit(files, message, max_retries=3):
+    """Commit {repo_path: bytes} as a single commit on GITHUB_BRANCH.
 
-    # Step 3: Create a new tree with the file added
-    r = requests.post(f"{repo_url}/git/trees", headers=GITHUB_HEADERS, json={
-        "base_tree": base_tree_sha,
-        "tree": [{
+    Blobs are uploaded once; only the tree/commit/ref steps are retried, which is
+    what a concurrent push (another test run, the retention job) invalidates.
+    """
+    tree = []
+    for repo_path, data in sorted(files.items()):
+        print(f"  Blob: {repo_path} ({len(data) / (1024 * 1024):.2f} MB)")
+        tree.append({
             "path": repo_path,
             "mode": "100644",
             "type": "blob",
-            "sha": blob_sha
-        }]
-    })
-    r.raise_for_status()
-    new_tree_sha = r.json()["sha"]
+            "sha": _github_create_blob(data),
+        })
 
-    # Step 4: Create a new commit
-    r = requests.post(f"{repo_url}/git/commits", headers=GITHUB_HEADERS, json={
-        "message": f"Add {repo_path}",
-        "tree": new_tree_sha,
-        "parents": [current_commit_sha]
-    })
-    r.raise_for_status()
-    new_commit_sha = r.json()["sha"]
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = requests.get(f"{GITHUB_REPO_URL}/git/ref/heads/{GITHUB_BRANCH}", headers=GITHUB_HEADERS)
+            r.raise_for_status()
+            parent_sha = r.json()["object"]["sha"]
 
-    # Step 5: Update the branch reference
-    r = requests.patch(f"{repo_url}/git/refs/heads/{GITHUB_BRANCH}", headers=GITHUB_HEADERS, json={
-        "sha": new_commit_sha
-    })
-    r.raise_for_status()
-    print(f"  GitHub: Uploaded {repo_path}")
+            r = requests.get(f"{GITHUB_REPO_URL}/git/commits/{parent_sha}", headers=GITHUB_HEADERS)
+            r.raise_for_status()
+            base_tree_sha = r.json()["tree"]["sha"]
+
+            r = requests.post(f"{GITHUB_REPO_URL}/git/trees", headers=GITHUB_HEADERS,
+                              json={"base_tree": base_tree_sha, "tree": tree})
+            r.raise_for_status()
+            new_tree_sha = r.json()["sha"]
+
+            r = requests.post(f"{GITHUB_REPO_URL}/git/commits", headers=GITHUB_HEADERS,
+                              json={"message": message, "tree": new_tree_sha, "parents": [parent_sha]})
+            r.raise_for_status()
+            commit_sha = r.json()["sha"]
+
+            r = requests.patch(f"{GITHUB_REPO_URL}/git/refs/heads/{GITHUB_BRANCH}",
+                               headers=GITHUB_HEADERS, json={"sha": commit_sha})
+            r.raise_for_status()
+            print(f"  GitHub: committed {len(tree)} file(s) as {commit_sha[:10]}")
+            return commit_sha
+        except requests.HTTPError as e:
+            if attempt == max_retries:
+                raise
+            print(f"  GitHub: commit attempt {attempt} failed ({e}), retrying...")
+            time.sleep(5)
 
 
 def _parse_folder_name(folder_name):
@@ -637,93 +642,56 @@ def _save_local_metadata(test_dir, folder_name, avg_fps, avg_app_time, drive_lin
     print(f"  Saved local metadata: {local_path}")
 
 
-def _github_update_summary(folder_name, avg_fps, avg_app_time, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
-    """Upload a metadata.json file into the test's folder on GitHub Pages."""
-    entry = _build_metadata(folder_name, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
-    content = json.dumps(entry, indent=2)
-    repo_path = f"AllTestRuns/{folder_name}/metadata.json"
-
-    sha = _github_get_file_sha(repo_path)
-    payload = {
-        "message": f"Add metadata for {folder_name}",
-        "content": base64.b64encode(content.encode()).decode(),
-        "branch": GITHUB_BRANCH,
-    }
-    if sha:
-        payload["sha"] = sha
-
-    r = requests.put(f"{GITHUB_API_BASE}/{repo_path}", headers=GITHUB_HEADERS, json=payload)
-    r.raise_for_status()
-    fps_str = f"{avg_fps:.0f}" if avg_fps is not None else "N/A"
-    app_time_str = f"{avg_app_time:.0f}" if avg_app_time is not None else "N/A"
-    print(f"  GitHub: Metadata uploaded — {folder_name} avg fps: {fps_str}, avg App T: {app_time_str} us")
-
-
 def upload_to_github(test_dir, folderName, avg_fps, avg_app_time, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
-    """Upload CSV and PNG to GitHub Pages and update the fps summary."""
+    """Publish one run to GitHub Pages as a single commit."""
     print(f"[GITHUB] Uploading run: {folderName}")
+    prefix = f"AllTestRuns/{folderName}"
+    files = {}
 
-    # Only upload CSV and PNG — mp4 is too large, served from Google Drive
-    extensions = ("*.csv", "*.png")
-    files_to_upload = []
-    for ext in extensions:
-        files_to_upload.extend(glob.glob(os.path.join(test_dir, ext)))
+    # CSV and PNG only — mp4 is too large for git, it is served from Drive.
+    for path in sorted(glob.glob(os.path.join(test_dir, "*.csv")) + glob.glob(os.path.join(test_dir, "*.png"))):
+        name = os.path.basename(path)
+        if SCREENSHOT_PNG.match(name):
+            try:
+                files[f"{prefix}/{os.path.splitext(name)[0]}.webp"] = _webp_bytes(path)
+                continue
+            except Exception as e:
+                print(f"  WARNING: WebP conversion failed for {name}, uploading the PNG: {e}")
+        with open(path, "rb") as f:
+            files[f"{prefix}/{name}"] = f.read()
 
-    if not files_to_upload:
+    logs_dir = os.path.join(test_dir, "Report Logs")
+    if os.path.isdir(logs_dir):
+        files[f"{prefix}/Report Logs.zip"] = _zip_bytes(logs_dir)
+
+    if not files:
         print("  ERROR: No files found to upload.")
         return False
 
-    failed = []
-    for file_path in files_to_upload:
-        filename = os.path.basename(file_path)
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        print(f"  Uploading: {filename} ({file_size_mb:.1f} MB)...")
-        try:
-            _github_upload_file(file_path, f"AllTestRuns/{folderName}/{filename}")
-        except Exception as e:
-            print(f"  WARNING: Failed to upload {filename}: {e}")
-            failed.append(filename)
-
-    # Upload Report Logs to GitHub Pages
-    report_logs_dir = os.path.join(test_dir, "Report Logs")
-    if os.path.isdir(report_logs_dir):
-        print(f"  Uploading 'Report Logs' to GitHub Pages...")
-        log_file_count = 0
-        for dirpath, _, filenames in os.walk(report_logs_dir):
-            for fname in filenames:
-                file_path = os.path.join(dirpath, fname)
-                file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                print(f"    Uploading log: {fname} ({file_size_mb:.1f} MB)...")
-                try:
-                    _github_upload_file(file_path, f"AllTestRuns/{folderName}/Report Logs/{fname}")
-                    log_file_count += 1
-                except Exception as e:
-                    print(f"    WARNING: Failed to upload log {fname}: {e}")
-                    failed.append(fname)
-        if log_file_count > 0:
-            print(f"  Uploaded {log_file_count} log file(s) to GitHub Pages.")
-
-    # Always write metadata so the run shows up on the dashboard even when a
-    # metric is missing (e.g. record-metrics wasn't enabled, so avg_fps is None).
-    # Whatever we do have — test name, timestamp, bot counts, errors, commit —
-    # gets recorded; the missing metric is left at its default ("N/A").
+    # Metadata always goes up, even when a metric is missing (e.g. record-metrics
+    # wasn't enabled, so avg_fps is None) — whatever we do have puts the run on
+    # the dashboard, and the missing metric stays at its default ("N/A").
     try:
-        # Save locally first so the metadata lives alongside the run data
-        # on disk even if the GitHub upload fails.
-        try:
-            _save_local_metadata(test_dir, folderName, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
-        except Exception as e:
-            print(f"  WARNING: Failed to save local metadata.json: {e}")
-        _github_update_summary(folderName, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
+        # Save locally first so the metadata lives alongside the run data on disk
+        # even if the GitHub upload fails.
+        _save_local_metadata(test_dir, folderName, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
     except Exception as e:
-        print(f"  WARNING: Failed to update summary: {e}")
-        failed.append("summary.json")
+        print(f"  WARNING: Failed to save local metadata.json: {e}")
 
-    if failed:
-        print(f"[GITHUB] Completed with errors. Failed: {', '.join(failed)}")
-    else:
-        print(f"[GITHUB] Done! View at: https://{GITHUB_REPO_OWNER}.github.io/{GITHUB_REPO_NAME}/")
-    return len(failed) == 0
+    entry = _build_metadata(folderName, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
+    files[f"{prefix}/metadata.json"] = json.dumps(entry, indent=2).encode("utf-8")
+
+    try:
+        _github_commit(files, f"Add {folderName}")
+    except Exception as e:
+        print(f"[GITHUB] FAILED: {e}")
+        return False
+
+    fps_str = f"{avg_fps:.0f}" if avg_fps is not None else "N/A"
+    app_time_str = f"{avg_app_time:.0f}" if avg_app_time is not None else "N/A"
+    print(f"  avg fps: {fps_str}, avg App T: {app_time_str} us")
+    print(f"[GITHUB] Done! View at: https://{GITHUB_REPO_OWNER}.github.io/{GITHUB_REPO_NAME}/")
+    return True
 
 
 # ---------------------------------------------------------------------------
