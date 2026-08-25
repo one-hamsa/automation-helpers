@@ -11,20 +11,27 @@ base64-encoded Message field, groups errors and exceptions, and emits:
 Usage:
     py -3 log_parser.py <test-folder>
     py -3 log_parser.py <test-folder>/Report Logs/<session>/Global.json.log
+    py -3 log_parser.py <test-folder>/Report Logs/<session>.udlog
     py -3 log_parser.py <test-folder> --out-dir <dir>
     py -3 log_parser.py <test-folder> --warnings-over 100
 
-When given a test folder, globs Report Logs/*/Global.json.log and uses the
-most-recent match. Exits non-zero if no Global.json.log is found.
+When given a test folder, looks for Report Logs/*/Global.json.log and, failing
+that, for the Global.json.log inside a Report Logs/*.udlog - the game zips a
+session's logs into one .udlog, which is what a pulled run holds now. Uses the
+most-recent match. Exits non-zero if neither holds a Global.json.log.
 """
 
 import argparse
 import base64
 import csv
+import io
 import json
 import re
 import sys
-from collections import defaultdict
+import zipfile
+from collections import defaultdict, namedtuple
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -118,20 +125,80 @@ def parse_exception(exc):
 
 # ---- Locate input file -----------------------------------------------------
 
+LOG_NAME = 'Global.json.log'
+
+# Where the session log came from, and where its findings CSV belongs.
+#   label        - what to print as the source
+#   session_name - stem of the findings CSV
+#   out_dir      - default folder for the findings CSV
+#   open_text    - zero-arg callable giving a text-mode context manager over the log
+LogSource = namedtuple('LogSource', 'label session_name out_dir open_text')
+
+
+@contextmanager
+def open_loose(path):
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+        yield f
+
+
+@contextmanager
+def open_udlog_member(udlog, member):
+    with zipfile.ZipFile(udlog) as z, z.open(member) as raw:
+        yield io.TextIOWrapper(raw, encoding='utf-8', errors='replace')
+
+
+def newest(paths):
+    paths = sorted(paths, key=lambda x: x.stat().st_mtime, reverse=True)
+    return paths[0] if paths else None
+
+
+def loose_source(path):
+    return LogSource(str(path), path.parent.name, path.parent, partial(open_loose, path))
+
+
+def udlog_source(udlog):
+    """The log inside a session archive, or None if the archive does not carry one.
+    The CSV goes beside the .udlog rather than into it, which is the same place the
+    loose-file layout put it: under 'Report Logs'."""
+    with zipfile.ZipFile(udlog) as z:
+        if LOG_NAME not in z.namelist():
+            return None
+    return LogSource(
+        label=f"{udlog}/{LOG_NAME}",
+        session_name=udlog.stem,
+        out_dir=udlog.parent,
+        open_text=partial(open_udlog_member, udlog, LOG_NAME),
+    )
+
+
 def resolve_input(arg):
     p = Path(arg)
+
     if p.is_file():
-        return p
+        if p.suffix.lower() == '.udlog':
+            source = udlog_source(p)
+            if not source:
+                sys.stderr.write(f"No {LOG_NAME} inside: {p}\n")
+                sys.exit(2)
+            return source
+        return loose_source(p)
+
     if p.is_dir():
-        candidates = sorted(
-            p.glob('Report Logs/*/Global.json.log'),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True,
-        )
-        if not candidates:
-            sys.stderr.write(f"No Global.json.log found under: {p / 'Report Logs'}\n")
+        loose = newest(p.glob(f'Report Logs/*/{LOG_NAME}'))
+        if loose:
+            return loose_source(loose)
+
+        udlog = newest(p.glob('Report Logs/*.udlog'))
+        if udlog:
+            source = udlog_source(udlog)
+            if source:
+                return source
+            sys.stderr.write(f"No {LOG_NAME} inside: {udlog}\n")
             sys.exit(2)
-        return candidates[0]
+
+        sys.stderr.write(f"No {LOG_NAME} found under: {p / 'Report Logs'}\n")
+        sys.exit(2)
+
     sys.stderr.write(f"Path not found: {p}\n")
     sys.exit(2)
 
@@ -204,7 +271,7 @@ class Group:
             self.rep_exc_first_5 = exc_first_5
 
 
-def process(file_path, warnings_over):
+def process(source, warnings_over):
     exception_groups = {}
     error_groups = {}
     warning_counts = defaultdict(int)
@@ -219,7 +286,7 @@ def process(file_path, warnings_over):
     nt_min_overall = None
     nt_max_overall = None
 
-    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+    with source.open_text() as f:
         for line in f:
             total_lines += 1
             line = line.strip()
@@ -416,23 +483,21 @@ def write_csv(out_path, exc_groups, err_groups, warn_emit, warn_counts):
 
 def main():
     ap = argparse.ArgumentParser(description='Parse UNDERDOGS Global.json.log for errors/exceptions.')
-    ap.add_argument('input', help='Test folder OR direct path to Global.json.log')
+    ap.add_argument('input', help='Test folder OR direct path to a Global.json.log or a .udlog')
     ap.add_argument('--out-dir', default=None,
                     help='Where to write <session>_log_findings.csv (default: alongside the .json.log)')
     ap.add_argument('--warnings-over', type=int, default=0,
                     help='Surface warning groups whose noise-filtered count >= N (default: warnings hidden)')
     args = ap.parse_args()
 
-    log_path = resolve_input(args.input)
-    exc_groups, err_groups, warn_emit, warn_counts, stats = process(log_path, args.warnings_over)
+    source = resolve_input(args.input)
+    exc_groups, err_groups, warn_emit, warn_counts, stats = process(source, args.warnings_over)
 
-    print_summary(log_path, exc_groups, err_groups, warn_emit, warn_counts, stats, args.warnings_over)
+    print_summary(source.label, exc_groups, err_groups, warn_emit, warn_counts, stats, args.warnings_over)
 
-    session_dir = log_path.parent
-    session_name = session_dir.name
-    out_dir = Path(args.out_dir) if args.out_dir else session_dir
+    out_dir = Path(args.out_dir) if args.out_dir else source.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = out_dir / f"{session_name}_log_findings.csv"
+    csv_path = out_dir / f"{source.session_name}_log_findings.csv"
     write_csv(csv_path, exc_groups, err_groups, warn_emit, warn_counts)
     print(f"\nCSV written: {csv_path}")
 

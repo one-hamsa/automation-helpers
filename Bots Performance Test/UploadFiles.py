@@ -18,6 +18,7 @@ import glob
 import json
 import base64
 import io
+import math
 import re
 import zipfile
 import argparse
@@ -30,6 +31,7 @@ import requests
 # UploadFiles.py lives in <repo>/ci/Bots Performance Test/, parsers in <repo>/ci/Analysis/.
 PARSERS_DIR = Path(__file__).resolve().parent.parent / "Analysis"
 LOG_PARSER = PARSERS_DIR / "log_parser.py"
+FUNCTIONALITY_CHECKS = PARSERS_DIR / "functionality_checks.py"
 
 # Old unity profiler deprecated setup
 # PROFILER_PARSER = PARSERS_DIR / "profiler_parser.py"
@@ -73,6 +75,42 @@ def run_parsers(test_dir, profiler_raw_path):
     #     except Exception as e:
     #         print(f"[PARSE] profiler_parser crashed: {e}")
 
+
+def run_functionality_checks(test_dir, expected_players=None):
+    """Decide whether the run was a real game - both clients in the room, the room the size
+    it should have been, players dying - and return the verdicts, or None.
+
+    Writes functionality.json into the test folder. Runs once both clients' logs are in
+    place, so it sees what everything else will ship. A crash here costs the checks,
+    never the upload.
+    """
+    if not FUNCTIONALITY_CHECKS.is_file():
+        print(f"[CHECKS] functionality_checks.py not found at {FUNCTIONALITY_CHECKS}, skipping.")
+        return None
+
+    py = sys.executable or "python"
+    cmd = [py, str(FUNCTIONALITY_CHECKS), test_dir]
+    if expected_players is not None:
+        cmd += ["--expected-players", str(expected_players)]
+    print(f"[CHECKS] Running functionality checks on {test_dir}")
+    try:
+        subprocess.run(cmd, check=False)
+    except Exception as e:
+        print(f"[CHECKS] functionality_checks crashed: {e}")
+        return None
+
+    checks_path = os.path.join(test_dir, CHECKS_JSON)
+    if not os.path.isfile(checks_path):
+        print(f"[CHECKS] No {CHECKS_JSON} produced, skipping the checklist.")
+        return None
+    try:
+        with open(checks_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"[CHECKS] Could not read {CHECKS_JSON}: {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -90,6 +128,18 @@ PROFILER_DB_ZIP = "il2cpplab.db.zip"
 # when the parse step could not run or failed; the Drive folders carry the same names.
 CPP_PROFILER_DIR = "C++ Profiler"
 SYMBOL_PARSER_DIR = "Symbol Parser"
+
+# The runner's own logs for the run, zipped out of LOG_FILES_DIR. Drive only - logcat
+# alone is several MB, which is permanent weight in the GitHub Pages repo.
+RUNNER_LOGS_ZIP = "Runner Logs.zip"
+
+# The Steam client's session log, copied in by "PC Bots Runner.bat" as the .udlog the
+# game zips on a graceful quit. Same file set as the Quest's "Report Logs", so the same
+# parsers read it.
+PC_LOGS_DIR = "PC Logs"
+
+# The run's functionality verdicts, written by Analysis/functionality_checks.py.
+CHECKS_JSON = "functionality.json"
 
 # OAuth credentials come from the environment - the workflow step maps them in from
 # repo secrets, and the .bat inherits them. There is no on-disk fallback and no
@@ -111,6 +161,24 @@ GITHUB_HEADERS = {
     "Authorization": f"Bearer {GITHUB_TOKEN}",
     "Accept": "application/vnd.github+json",
 }
+
+
+# The run is judged on its worst tenth, not on its average: a handful of bad seconds is
+# what a player feels, and an average buries them. Both numbers describe that same worst
+# 10% of the run, from opposite ends - FPS is bad when low, App T when high. Taking the
+# high end of FPS would report the smoothest part of the run and hide the stutter.
+# The OVR CSV samples once per second and there are only ~90 samples in the window, so a
+# deeper percentile (p99 / "1% low") would just be the single worst sample.
+FPS_PERCENTILE = 10
+APP_TIME_PERCENTILE = 90
+
+
+def percentile(values, q):
+    """Nearest-rank percentile: q% of the samples are at or below the value returned.
+    No interpolation, so the result is always a real sample from the run."""
+    ordered = sorted(values)
+    rank = max(1, math.ceil(q / 100 * len(ordered)))
+    return ordered[rank - 1]
 
 
 # ---------------------------------------------------------------------------
@@ -161,19 +229,21 @@ def read_metric_series(test_dir, column):
     return list(times_sec), list(values)
 
 
-def compute_avg_app_time(test_dir):
-    """Average App T (app GPU time, microseconds) over the run. None if unavailable."""
+def compute_app_time_worst_10pct(test_dir):
+    """App T (app GPU time, microseconds) of the run's worst tenth - the value 10% of the
+    samples were at or above. None if unavailable."""
     _, values = read_metric_series(test_dir, "app_gpu_time_microseconds")
     if not values:
         return None
-    avg = sum(values) / len(values)
-    print(f"  Average App T: {avg:.0f} us (over {len(values)} samples after 60s)")
-    return avg
+    value = percentile(values, APP_TIME_PERCENTILE)
+    print(f"  App T - worst 10%: {value:.0f} us "
+          f"(over {len(values)} samples after 60s, average was {sum(values) / len(values):.0f})")
+    return value
 
 
 def generate_graph(test_dir, folderName):
     """Read the CSV and produce a fps Utilization line chart.
-    Returns (graph_path, avg_fps) or (None, None) on failure.
+    Returns (graph_path, fps_worst_10pct) or (None, None) on failure.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -185,13 +255,16 @@ def generate_graph(test_dir, folderName):
 
     print(f"  Plotting {len(times_sec)} data points (after 60s)...")
 
-    avg_val = sum(fps_values) / len(fps_values)
+    worst_10pct_val = percentile(fps_values, FPS_PERCENTILE)
     min_val = min(fps_values)
     max_val = max(fps_values)
+    print(f"  FPS - worst 10%: {worst_10pct_val:.0f} (over {len(fps_values)} samples after 60s, "
+          f"average was {sum(fps_values) / len(fps_values):.1f})")
 
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(times_sec, fps_values, linewidth=1.2, color="#2563eb", label="FPS")
-    ax.axhline(y=avg_val, color="#16a34a", linestyle="--", linewidth=1.2, label=f"Avg: {avg_val:.0f}")
+    # The headline number gets the emphatic line - it is what the run is judged on.
+    ax.axhline(y=worst_10pct_val, color="#16a34a", linestyle="--", linewidth=1.2, label=f"Worst 10%: {worst_10pct_val:.0f}")
     ax.axhline(y=min_val, color="#0891b2", linestyle=":",  linewidth=1.2, label=f"Min: {min_val:.0f}")
     ax.axhline(y=max_val, color="#dc2626", linestyle=":",  linewidth=1.2, label=f"Max: {max_val:.0f}")
 
@@ -207,7 +280,7 @@ def generate_graph(test_dir, folderName):
     plt.close(fig)
 
     print(f"  Graph saved: {out_path}")
-    return out_path, avg_val
+    return out_path, worst_10pct_val
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +384,14 @@ def upload_to_drive(test_dir, folderName):
     folder_id = create_drive_folder(service, folderName, DRIVE_PARENT_FOLDER_ID)
     drive_folder_link = f"https://drive.google.com/drive/folders/{folder_id}"
 
+    # Before the "no files to upload" bail below: a run that produced no results is
+    # exactly the run whose runner logs are worth having.
+    runner_logs = os.path.join(test_dir, RUNNER_LOGS_ZIP)
+    if os.path.isfile(runner_logs):
+        size_mb = os.path.getsize(runner_logs) / (1024 * 1024)
+        print(f"  Uploading: {RUNNER_LOGS_ZIP} ({size_mb:.1f} MB)...")
+        upload_file_drive(service, runner_logs, folder_id)
+
     extensions = ("*.csv", "*.png")
     files_to_upload = []
     for ext in extensions:
@@ -349,6 +430,23 @@ def upload_to_drive(test_dir, folderName):
             print("  WARNING: 'Report Logs' folder exists but no files found inside!")
         else:
             print(f"  Uploaded {log_file_count} log file(s) to Drive.")
+
+    # The Steam client's session log - one .udlog from the instance that was quit
+    # gracefully, so it holds a complete session rather than a truncated one.
+    pc_logs_dir = os.path.join(test_dir, PC_LOGS_DIR)
+    if os.path.isdir(pc_logs_dir):
+        print(f"  Uploading '{PC_LOGS_DIR}' folder to Drive...")
+        pc_folder_id = create_drive_folder(service, PC_LOGS_DIR, folder_id)
+        pc_count = _upload_dir_flat(service, pc_logs_dir, pc_folder_id)
+        if pc_count == 0:
+            print(f"  WARNING: '{PC_LOGS_DIR}' folder exists but no files found inside!")
+        else:
+            print(f"  Uploaded {pc_count} Steam log file(s) to Drive.")
+
+    checks_path = os.path.join(test_dir, CHECKS_JSON)
+    if os.path.isfile(checks_path):
+        print(f"  Uploading: {CHECKS_JSON}...")
+        upload_file_drive(service, checks_path, folder_id)
 
     upload_cpp_profiler_to_drive(service, test_dir, folder_id)
 
@@ -450,6 +548,22 @@ def _webp_bytes(png_path):
     return buf.getvalue()
 
 
+def _write_webp(png_path):
+    """Write the WebP next to the screenshot it came from. On disk rather than only in
+    memory because the nightly report attaches these to Discord: three Quest PNGs are
+    ~10 MB and would not fit, the same three as WebP are well under a megabyte.
+    Returns the path, or None.
+    """
+    webp_path = f"{os.path.splitext(png_path)[0]}.webp"
+    try:
+        with open(webp_path, "wb") as f:
+            f.write(_webp_bytes(png_path))
+    except Exception as e:
+        print(f"[SCREENSHOT] WARNING: Could not write {os.path.basename(webp_path)}: {e}")
+        return None
+    return webp_path
+
+
 def _zip_bytes(root_dir):
     """Zip a directory tree, preserving paths relative to root_dir."""
     buf = io.BytesIO()
@@ -459,6 +573,41 @@ def _zip_bytes(root_dir):
                 full = os.path.join(dirpath, fname)
                 z.write(full, os.path.relpath(full, root_dir).replace("\\", "/"))
     return buf.getvalue()
+
+
+def _write_runner_logs_zip(test_dir):
+    """Zip the runner's own logs for this run - the combined .bat console log and the
+    device logcat - into the test folder, so they leave the rig with the results instead
+    of being overwritten by the next run. Returns the zip path, or None.
+
+    LOG_FILES_DIR is set by "Run Both Tests.bat" and inherited from there. Both runners
+    have finished by the time this script starts, so their output is complete; the only
+    thing the zip cannot contain is this script's own output, which is still being written
+    into the same log.
+    """
+    logs_dir = os.environ.get("LOG_FILES_DIR")
+    if not logs_dir or not os.path.isdir(logs_dir):
+        print(f"[RUNNER LOGS] Nothing to zip ({logs_dir or 'LOG_FILES_DIR unset'}), skipping.")
+        return None
+
+    zip_path = os.path.join(test_dir, RUNNER_LOGS_ZIP)
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+            for dirpath, _, filenames in os.walk(logs_dir):
+                for fname in sorted(filenames):
+                    full = os.path.join(dirpath, fname)
+                    arcname = os.path.relpath(full, logs_dir).replace("\\", "/")
+                    try:
+                        z.write(full, arcname)
+                    except OSError as e:
+                        print(f"[RUNNER LOGS] WARNING: skipped {arcname}: {e}")
+    except OSError as e:
+        print(f"[RUNNER LOGS] WARNING: could not write {RUNNER_LOGS_ZIP}: {e}")
+        return None
+
+    size_mb = os.path.getsize(zip_path) / (1024 * 1024)
+    print(f"[RUNNER LOGS] {RUNNER_LOGS_ZIP} ({size_mb:.1f} MB) from {logs_dir}")
+    return zip_path
 
 
 def _github_create_blob(data):
@@ -549,21 +698,47 @@ def _find_report_log(test_dir, filename):
     return max(matches, key=os.path.getmtime)
 
 
+def _find_udlog(test_dir):
+    """The session log archive pulled off the device, or None. The game zips a session's
+    logs into one .udlog, so this is where the individual logs live now."""
+    matches = glob.glob(os.path.join(test_dir, "Report Logs", "**", "*.udlog"), recursive=True)
+    if not matches:
+        return None
+    return max(matches, key=os.path.getmtime)
+
+
+def _read_report_log(test_dir, filename):
+    """Read one of the session's logs as text, whether it was pulled loose or zipped into
+    a .udlog. Returns (label, text), or (None, None) if neither holds it."""
+    log_path = _find_report_log(test_dir, filename)
+    if log_path:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            return os.path.basename(log_path), f.read()
+
+    udlog = _find_udlog(test_dir)
+    if not udlog:
+        return None, None
+    try:
+        with zipfile.ZipFile(udlog) as z:
+            if filename not in z.namelist():
+                return None, None
+            return f"{os.path.basename(udlog)}/{filename}", z.read(filename).decode("utf-8", "replace")
+    except (zipfile.BadZipFile, OSError) as e:
+        print(f"  WARNING: could not read {filename} from {os.path.basename(udlog)}: {e}")
+        return None, None
+
+
 def _count_bots_joined(test_dir):
     """Count players that connected during the run (the XR bot + the PC bots).
-    Reads the plaintext Global.log and counts 'Player connected:' lines.
+    Counts 'Player connected:' lines in the session's Global.log.
     Returns an int, or None if no Global.log is found.
     """
-    log_path = _find_report_log(test_dir, "Global.log")
-    if not log_path:
+    label, text = _read_report_log(test_dir, "Global.log")
+    if text is None:
         print("[BOTS] No Global.log found, skipping bot count.")
         return None
-    count = 0
-    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            if "Player connected:" in line:
-                count += 1
-    print(f"[BOTS] {count} player(s) connected (from {os.path.basename(log_path)})")
+    count = sum(1 for line in text.splitlines() if "Player connected:" in line)
+    print(f"[BOTS] {count} player(s) connected (from {label})")
     return count
 
 
@@ -595,7 +770,7 @@ def _read_log_stats(test_dir):
     return errors, exceptions
 
 
-def _write_ci_outputs(avg_fps, avg_app_time):
+def _write_ci_outputs(fps_worst_10pct, app_time_worst_10pct):
     """Publish the run's headline metrics as GitHub Actions step outputs so the
     workflow can threshold-check them without re-reading the test folder.
     No-op outside CI (GITHUB_OUTPUT unset), and never fails the run.
@@ -605,21 +780,39 @@ def _write_ci_outputs(avg_fps, avg_app_time):
         return
     try:
         with open(out_path, "a", encoding="utf-8") as f:
-            if avg_fps is not None:
-                f.write(f"avg_fps={avg_fps:.1f}\n")
-            if avg_app_time is not None:
-                f.write(f"avg_app_time={avg_app_time:.0f}\n")
-        print(f"[CI] Wrote avg_fps / avg_app_time to {out_path}")
+            if fps_worst_10pct is not None:
+                f.write(f"fps_worst_10pct={fps_worst_10pct:.1f}\n")
+            if app_time_worst_10pct is not None:
+                f.write(f"app_time_worst_10pct={app_time_worst_10pct:.0f}\n")
+        print(f"[CI] Wrote fps_worst_10pct / app_time_worst_10pct to {out_path}")
     except Exception as e:
         print(f"[CI] WARNING: Could not write step outputs: {e}")
 
 
-def _build_metadata(folder_name, avg_fps, avg_app_time, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _write_ci_checks(checks):
+    """Publish the functionality verdicts as a step output, so the nightly report renders
+    the same checklist the dashboard shows. Compact JSON on one line - a step output
+    cannot carry a raw newline. No-op outside CI, and never fails the run.
+    """
+    out_path = os.environ.get("GITHUB_OUTPUT")
+    if not out_path or not checks:
+        return
+    try:
+        one_line = json.dumps(checks, separators=(",", ":"))
+        with open(out_path, "a", encoding="utf-8") as f:
+            f.write(f"checks_json={one_line}\n")
+        print(f"[CI] Wrote checks_json ({len(checks)} checks) to {out_path}")
+    except Exception as e:
+        print(f"[CI] WARNING: Could not write the checks output: {e}")
+
+
+def _build_metadata(folder_name, fps_worst_10pct, app_time_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     test_name, timestamp = _parse_folder_name(folder_name)
     entry = {
-        "avg_fps": f"{avg_fps:.0f}" if avg_fps is not None else "N/A",
+        # The worst tenth of the run, not its average - see FPS_PERCENTILE above.
+        "fps_worst_10pct": f"{fps_worst_10pct:.0f}" if fps_worst_10pct is not None else "N/A",
         # App T (app GPU time) in microseconds, same metric the GPU automation test reports.
-        "avg_app_time": f"{avg_app_time:.0f}" if avg_app_time is not None else "N/A",
+        "app_time_worst_10pct": f"{app_time_worst_10pct:.0f}" if app_time_worst_10pct is not None else "N/A",
         "test_name": test_name,
         "timestamp": timestamp,
         "has_thumbnail": has_thumbnail,
@@ -633,16 +826,16 @@ def _build_metadata(folder_name, avg_fps, avg_app_time, drive_link=None, has_thu
     return entry
 
 
-def _save_local_metadata(test_dir, folder_name, avg_fps, avg_app_time, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _save_local_metadata(test_dir, folder_name, fps_worst_10pct, app_time_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Write metadata.json into the test folder on disk so it's readable offline."""
-    entry = _build_metadata(folder_name, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
+    entry = _build_metadata(folder_name, fps_worst_10pct, app_time_worst_10pct, drive_link, has_thumbnail, started_by, extra)
     local_path = os.path.join(test_dir, "metadata.json")
     with open(local_path, "w", encoding="utf-8") as f:
         json.dump(entry, f, indent=2)
     print(f"  Saved local metadata: {local_path}")
 
 
-def upload_to_github(test_dir, folderName, avg_fps, avg_app_time, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def upload_to_github(test_dir, folderName, fps_worst_10pct, app_time_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Publish one run to GitHub Pages as a single commit."""
     print(f"[GITHUB] Uploading run: {folderName}")
     prefix = f"AllTestRuns/{folderName}"
@@ -652,8 +845,15 @@ def upload_to_github(test_dir, folderName, avg_fps, avg_app_time, drive_link=Non
     for path in sorted(glob.glob(os.path.join(test_dir, "*.csv")) + glob.glob(os.path.join(test_dir, "*.png"))):
         name = os.path.basename(path)
         if SCREENSHOT_PNG.match(name):
+            webp_name = f"{os.path.splitext(name)[0]}.webp"
             try:
-                files[f"{prefix}/{os.path.splitext(name)[0]}.webp"] = _webp_bytes(path)
+                # Written to disk during the screenshot pass; re-encode only if that failed.
+                webp_path = os.path.join(test_dir, webp_name)
+                if os.path.isfile(webp_path):
+                    with open(webp_path, "rb") as f:
+                        files[f"{prefix}/{webp_name}"] = f.read()
+                else:
+                    files[f"{prefix}/{webp_name}"] = _webp_bytes(path)
                 continue
             except Exception as e:
                 print(f"  WARNING: WebP conversion failed for {name}, uploading the PNG: {e}")
@@ -664,21 +864,34 @@ def upload_to_github(test_dir, folderName, avg_fps, avg_app_time, drive_link=Non
     if os.path.isdir(logs_dir):
         files[f"{prefix}/Report Logs.zip"] = _zip_bytes(logs_dir)
 
+    # One graceful-quit session, ~120 KB zipped - light enough for the Pages repo, and the
+    # only record of what the Steam client saw.
+    pc_logs_dir = os.path.join(test_dir, PC_LOGS_DIR)
+    if os.path.isdir(pc_logs_dir):
+        files[f"{prefix}/{PC_LOGS_DIR}.zip"] = _zip_bytes(pc_logs_dir)
+
+    # The verdicts are already in metadata.json; this carries what they were derived from
+    # (versions, room ids, player rosters) for anyone reading a past run.
+    checks_path = os.path.join(test_dir, CHECKS_JSON)
+    if os.path.isfile(checks_path):
+        with open(checks_path, "rb") as f:
+            files[f"{prefix}/{CHECKS_JSON}"] = f.read()
+
     if not files:
         print("  ERROR: No files found to upload.")
         return False
 
     # Metadata always goes up, even when a metric is missing (e.g. record-metrics
-    # wasn't enabled, so avg_fps is None) — whatever we do have puts the run on
+    # wasn't enabled, so fps_worst_10pct is None) — whatever we do have puts the run on
     # the dashboard, and the missing metric stays at its default ("N/A").
     try:
         # Save locally first so the metadata lives alongside the run data on disk
         # even if the GitHub upload fails.
-        _save_local_metadata(test_dir, folderName, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
+        _save_local_metadata(test_dir, folderName, fps_worst_10pct, app_time_worst_10pct, drive_link, has_thumbnail, started_by, extra)
     except Exception as e:
         print(f"  WARNING: Failed to save local metadata.json: {e}")
 
-    entry = _build_metadata(folderName, avg_fps, avg_app_time, drive_link, has_thumbnail, started_by, extra)
+    entry = _build_metadata(folderName, fps_worst_10pct, app_time_worst_10pct, drive_link, has_thumbnail, started_by, extra)
     files[f"{prefix}/metadata.json"] = json.dumps(entry, indent=2).encode("utf-8")
 
     try:
@@ -687,9 +900,9 @@ def upload_to_github(test_dir, folderName, avg_fps, avg_app_time, drive_link=Non
         print(f"[GITHUB] FAILED: {e}")
         return False
 
-    fps_str = f"{avg_fps:.0f}" if avg_fps is not None else "N/A"
-    app_time_str = f"{avg_app_time:.0f}" if avg_app_time is not None else "N/A"
-    print(f"  avg fps: {fps_str}, avg App T: {app_time_str} us")
+    fps_str = f"{fps_worst_10pct:.0f}" if fps_worst_10pct is not None else "N/A"
+    app_time_str = f"{app_time_worst_10pct:.0f}" if app_time_worst_10pct is not None else "N/A"
+    print(f"  FPS - worst 10%: {fps_str}, App T - worst 10%: {app_time_str} us")
     print(f"[GITHUB] Done! View at: https://{GITHUB_REPO_OWNER}.github.io/{GITHUB_REPO_NAME}/")
     return True
 
@@ -730,22 +943,22 @@ def main():
     do_graph = not args.upload_only
     do_upload = not args.graph_only
 
-    avg_fps = None
-    avg_app_time = None
+    fps_worst_10pct = None
+    app_time_worst_10pct = None
     mp4_drive_link = None
     has_thumbnail = False
 
     if do_graph:
         print("[GRAPH] Generating App fps Time graph...")
-        graph_path, avg_fps = generate_graph(test_dir, folderName)
+        graph_path, fps_worst_10pct = generate_graph(test_dir, folderName)
         if graph_path:
             print("[GRAPH] Success.")
         else:
             print("[GRAPH] Failed.")
 
-        print("[METRICS] Computing average App T...")
-        avg_app_time = compute_avg_app_time(test_dir)
-        _write_ci_outputs(avg_fps, avg_app_time)
+        print("[METRICS] Computing the App T of the worst 10%...")
+        app_time_worst_10pct = compute_app_time_worst_10pct(test_dir)
+        _write_ci_outputs(fps_worst_10pct, app_time_worst_10pct)
 
         # Quest screencap captures both eyes side-by-side and each eye is
         # tilted, so crop to left eye, rotate to straighten, then trim
@@ -792,6 +1005,7 @@ def main():
                 fw, fh = final.size
                 print(f"[SCREENSHOT] {sc_name}: cropped, rotated -20°, trimmed ({w}x{h} -> {fw}x{fh})")
                 has_thumbnail = True
+                _write_webp(sc_path)
             except Exception as e:
                 print(f"[SCREENSHOT] WARNING: Could not process {sc_name}: {e}")
         if not has_thumbnail:
@@ -823,7 +1037,20 @@ def main():
     # as the source artifacts (and gets uploaded with them).
     run_parsers(test_dir, profiler_raw_path)
 
+    # The room should hold the PC bots plus the XR bot on the headset.
+    try:
+        num_pc_bots = int(args.num_pc_bots)
+    except (ValueError, TypeError):
+        num_pc_bots = None
+    expected_players = num_pc_bots + 1 if num_pc_bots is not None and num_pc_bots >= 0 else None
+
+    checks_result = run_functionality_checks(test_dir, expected_players)
+    checks = (checks_result or {}).get("checks")
+    _write_ci_checks(checks)
+
     # Extra dashboard metadata gathered from the run's logs.
+    #  - checks:         the functionality verdicts, rendered as-is by the dashboard and
+    #                    by the nightly Discord report.
     #  - bots_requested: PC bots requested + 1 for the XR/Quest bot.
     #  - bots_joined:    players that actually connected (XR + PC bots).
     #  - errors/exceptions: totals from the log parser's findings CSV.
@@ -837,15 +1064,17 @@ def main():
     github_run_id = os.environ.get("GITHUB_RUN_ID")
     if github_run_id:
         extra["github_run_id"] = github_run_id
-    bots_joined = _count_bots_joined(test_dir)
+    if checks:
+        extra["checks"] = checks
+
+    # The checks already built the room roster, counting each player once however many
+    # times they reconnected; the line count is the fallback for a run without them.
+    quest_client = (checks_result or {}).get("clients", {}).get("quest")
+    bots_joined = len(quest_client["players"]) if quest_client else _count_bots_joined(test_dir)
     if bots_joined is not None:
         extra["bots_joined"] = bots_joined
-    try:
-        num_pc_bots = int(args.num_pc_bots)
-    except (ValueError, TypeError):
-        num_pc_bots = None
-    if num_pc_bots is not None and num_pc_bots >= 0:
-        extra["bots_requested"] = num_pc_bots + 1
+    if expected_players is not None:
+        extra["bots_requested"] = expected_players
     errors, exceptions = _read_log_stats(test_dir)
     if errors is not None:
         extra["errors"] = errors
@@ -856,6 +1085,8 @@ def main():
         extra["commit_ref"] = args.commit_ref
 
     if do_upload:
+        _write_runner_logs_zip(test_dir)
+
         print("[UPLOAD] Uploading files to Google Drive...")
         try:
             mp4_drive_link = upload_to_drive(test_dir, folderName)
@@ -869,7 +1100,7 @@ def main():
 
         print("[UPLOAD] Uploading files to GitHub Pages...")
         try:
-            success = upload_to_github(test_dir, folderName, avg_fps, avg_app_time, mp4_drive_link, has_thumbnail, args.started_by, extra)
+            success = upload_to_github(test_dir, folderName, fps_worst_10pct, app_time_worst_10pct, mp4_drive_link, has_thumbnail, args.started_by, extra)
             if success:
                 print("[UPLOAD] GitHub upload success.")
                 # Old unity profiler deprecated setup

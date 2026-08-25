@@ -18,6 +18,7 @@ import glob
 import json
 import base64
 import io
+import math
 import re
 import zipfile
 import argparse
@@ -34,6 +35,10 @@ LOG_PARSER = Path(__file__).resolve().parent.parent / "Analysis" / "log_parser.p
 # metrics session as a .udlog (it reported before quitting, and the RenderDoc relaunch zipped
 # it) plus the RenderDoc session's own log dir. Uploaded to Drive and GitHub Pages.
 REPORT_LOGS_DIRS = ("Report Logs",)
+
+# The runner's own logs for this level, zipped out of GPU_TEST_LOG_DIR. Drive only -
+# logcat alone is several MB, which is permanent weight in the GitHub Pages repo.
+RUNNER_LOGS_ZIP = "Runner Logs.zip"
 
 
 def run_log_parser(test_dir):
@@ -81,9 +86,24 @@ GITHUB_HEADERS = {
 # ---------------------------------------------------------------------------
 # Graph generation
 # ---------------------------------------------------------------------------
+# App T is judged on the run's slow tenth, not its average: a few bad seconds are what a
+# player feels, and an average buries them. Matches the bots test, which uses the same
+# percentile on the same OVR column. The CSV samples once per second, so a deeper
+# percentile (p99) would just be the single worst sample.
+APP_TIME_PERCENTILE = 90
+
+
+def percentile(values, q):
+    """Nearest-rank percentile: q% of the samples are at or below the value returned.
+    No interpolation, so the result is always a real sample from the run."""
+    ordered = sorted(values)
+    rank = max(1, math.ceil(q / 100 * len(ordered)))
+    return ordered[rank - 1]
+
+
 def generate_graph(test_dir, folderName):
     """Read the CSV and produce an App GPU Time line chart.
-    Returns (graph_path, avg_gpu) or (None, None) on failure.
+    Returns (graph_path, gpu_worst_10pct) or (None, None) on failure.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -129,13 +149,16 @@ def generate_graph(test_dir, folderName):
 
     print(f"  Plotting {len(times_sec)} data points (after 60s)...")
 
-    avg_val = sum(gpu_times_ms) / len(gpu_times_ms)
+    worst_10pct_val = percentile(gpu_times_ms, APP_TIME_PERCENTILE)
     min_val = min(gpu_times_ms)
     max_val = max(gpu_times_ms)
+    print(f"  App T - worst 10%: {worst_10pct_val:.0f} us (over {len(gpu_times_ms)} samples "
+          f"after 60s, average was {sum(gpu_times_ms) / len(gpu_times_ms):.0f})")
 
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(times_sec, gpu_times_ms, linewidth=1.2, color="#2563eb", label="App GPU Time")
-    ax.axhline(y=avg_val, color="#16a34a", linestyle="--", linewidth=1.2, label=f"Avg: {avg_val:.0f}")
+    # The headline number gets the emphatic line - it is what the run is judged on.
+    ax.axhline(y=worst_10pct_val, color="#16a34a", linestyle="--", linewidth=1.2, label=f"Worst 10%: {worst_10pct_val:.0f}")
     ax.axhline(y=min_val, color="#0891b2", linestyle=":",  linewidth=1.2, label=f"Min: {min_val:.0f}")
     ax.axhline(y=max_val, color="#dc2626", linestyle=":",  linewidth=1.2, label=f"Max: {max_val:.0f}")
 
@@ -151,7 +174,7 @@ def generate_graph(test_dir, folderName):
     plt.close(fig)
 
     print(f"  Graph saved: {out_path}")
-    return out_path, avg_val
+    return out_path, worst_10pct_val
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +277,14 @@ def upload_to_drive(test_dir, folderName):
     folder_id = create_drive_folder(service, folderName, DRIVE_PARENT_FOLDER_ID)
     drive_folder_link = f"https://drive.google.com/drive/folders/{folder_id}"
 
+    # Before the "no files to upload" bail below: a run that produced no results is
+    # exactly the run whose runner logs are worth having.
+    runner_logs = os.path.join(test_dir, RUNNER_LOGS_ZIP)
+    if os.path.isfile(runner_logs):
+        size_mb = os.path.getsize(runner_logs) / (1024 * 1024)
+        print(f"  Uploading: {RUNNER_LOGS_ZIP} ({size_mb:.1f} MB)...")
+        upload_file_drive(service, runner_logs, folder_id)
+
     # .rdc is the RenderDoc capture — large, Drive-only (never goes to GitHub, like the profiler .raw).
     extensions = ("*.csv", "*.png", "*.rdc")
     files_to_upload = []
@@ -333,6 +364,41 @@ def _zip_bytes(root_dir):
                 full = os.path.join(dirpath, fname)
                 z.write(full, os.path.relpath(full, root_dir).replace("\\", "/"))
     return buf.getvalue()
+
+
+def _write_runner_logs_zip(test_dir):
+    """Zip the runner's own logs for this level - the .bat console and the device logcat -
+    into the test folder, so they leave the rig with the results instead of being
+    overwritten by the next run of the same level. Returns the zip path, or None.
+
+    GPU_TEST_LOG_DIR is set by GPU_Performance_Test.yaml, which points it at that level's
+    log folder. Both files are still being written at this point (this script runs inside
+    the .bat, and logcat streams until the .bat exits), so each ends a little short of the
+    full run.
+    """
+    logs_dir = os.environ.get("GPU_TEST_LOG_DIR")
+    if not logs_dir or not os.path.isdir(logs_dir):
+        print(f"[RUNNER LOGS] Nothing to zip ({logs_dir or 'GPU_TEST_LOG_DIR unset'}), skipping.")
+        return None
+
+    zip_path = os.path.join(test_dir, RUNNER_LOGS_ZIP)
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+            for dirpath, _, filenames in os.walk(logs_dir):
+                for fname in sorted(filenames):
+                    full = os.path.join(dirpath, fname)
+                    arcname = os.path.relpath(full, logs_dir).replace("\\", "/")
+                    try:
+                        z.write(full, arcname)
+                    except OSError as e:
+                        print(f"[RUNNER LOGS] WARNING: skipped {arcname}: {e}")
+    except OSError as e:
+        print(f"[RUNNER LOGS] WARNING: could not write {RUNNER_LOGS_ZIP}: {e}")
+        return None
+
+    size_mb = os.path.getsize(zip_path) / (1024 * 1024)
+    print(f"[RUNNER LOGS] {RUNNER_LOGS_ZIP} ({size_mb:.1f} MB) from {logs_dir}")
+    return zip_path
 
 
 def _github_create_blob(data):
@@ -458,14 +524,14 @@ def _parse_folder_name(folder_name):
     return test_name, scene_name, timestamp
 
 
-def _write_ci_outputs(avg_gpu, folder_name):
-    """Append the run's average App GPU Time (microseconds) to GPU_METRICS_FILE so the
+def _write_ci_outputs(gpu_worst_10pct, folder_name):
+    """Append the worst-10% App GPU Time (microseconds) to GPU_METRICS_FILE so the
     workflow can threshold-check it without re-reading the test folder. A file rather
     than a step output because a sweep runs this script once per level, and a step
     output would keep only the last level's number. Empty value = no metric produced.
     No-op outside CI (env var unset), and never fails the run.
     """
-    value = "" if avg_gpu is None else f"{avg_gpu:.0f}"
+    value = "" if gpu_worst_10pct is None else f"{gpu_worst_10pct:.0f}"
 
     metrics_path = os.environ.get("GPU_METRICS_FILE")
     if metrics_path:
@@ -481,11 +547,12 @@ def _write_ci_outputs(avg_gpu, folder_name):
             print(f"[CI] WARNING: Could not append run metrics: {e}")
 
 
-def _build_metadata(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _build_metadata(folder_name, gpu_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     test_name, scene_name, timestamp = _parse_folder_name(folder_name)
 
     entry = {
-        "avg_gpu": f"{avg_gpu:.0f}" if avg_gpu is not None else "N/A",
+        # The slow tenth of the run - see APP_TIME_PERCENTILE above.
+        "gpu_worst_10pct": f"{gpu_worst_10pct:.0f}" if gpu_worst_10pct is not None else "N/A",
         "test_name": test_name,
         "scene_name": scene_name,
         "timestamp": timestamp,
@@ -500,16 +567,16 @@ def _build_metadata(folder_name, avg_gpu, drive_link=None, has_thumbnail=False, 
     return entry
 
 
-def _save_local_metadata(test_dir, folder_name, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _save_local_metadata(test_dir, folder_name, gpu_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Write metadata.json into the test folder on disk so it's readable offline."""
-    entry = _build_metadata(folder_name, avg_gpu, drive_link, has_thumbnail, started_by, extra)
+    entry = _build_metadata(folder_name, gpu_worst_10pct, drive_link, has_thumbnail, started_by, extra)
     local_path = os.path.join(test_dir, "metadata.json")
     with open(local_path, "w", encoding="utf-8") as f:
         json.dump(entry, f, indent=2)
     print(f"  Saved local metadata: {local_path}")
 
 
-def upload_to_github(test_dir, folderName, avg_gpu, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def upload_to_github(test_dir, folderName, gpu_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Publish one run to GitHub Pages as a single commit."""
     print(f"[GITHUB] Uploading run: {folderName}")
     prefix = f"AllTestRuns/{folderName}"
@@ -538,16 +605,16 @@ def upload_to_github(test_dir, folderName, avg_gpu, drive_link=None, has_thumbna
         return False
 
     # Metadata always goes up, even when a metric is missing (e.g. record-metrics
-    # wasn't enabled, so avg_gpu is None) — whatever we do have puts the run on
+    # wasn't enabled, so gpu_worst_10pct is None) — whatever we do have puts the run on
     # the dashboard, and the missing metric stays at its default ("N/A").
     try:
         # Save locally first so the metadata lives alongside the run data on disk
         # even if the GitHub upload fails.
-        _save_local_metadata(test_dir, folderName, avg_gpu, drive_link, has_thumbnail, started_by, extra)
+        _save_local_metadata(test_dir, folderName, gpu_worst_10pct, drive_link, has_thumbnail, started_by, extra)
     except Exception as e:
         print(f"  WARNING: Failed to save local metadata.json: {e}")
 
-    entry = _build_metadata(folderName, avg_gpu, drive_link, has_thumbnail, started_by, extra)
+    entry = _build_metadata(folderName, gpu_worst_10pct, drive_link, has_thumbnail, started_by, extra)
     files[f"{prefix}/metadata.json"] = json.dumps(entry, indent=2).encode("utf-8")
 
     try:
@@ -556,7 +623,7 @@ def upload_to_github(test_dir, folderName, avg_gpu, drive_link=None, has_thumbna
         print(f"[GITHUB] FAILED: {e}")
         return False
 
-    gpu_str = f"{avg_gpu:.0f}" if avg_gpu is not None else "N/A"
+    gpu_str = f"{gpu_worst_10pct:.0f}" if gpu_worst_10pct is not None else "N/A"
     print(f"  avg GPU: {gpu_str} us")
     print(f"[GITHUB] Done! View at: https://{GITHUB_REPO_OWNER}.github.io/{GITHUB_REPO_NAME}/")
     return True
@@ -599,18 +666,18 @@ def main():
     do_graph = not args.upload_only
     do_upload = not args.graph_only
 
-    avg_gpu = None
+    gpu_worst_10pct = None
     mp4_drive_link = None
     has_thumbnail = False
 
     if do_graph:
         print("[GRAPH] Generating App GPU Time graph...")
-        graph_path, avg_gpu = generate_graph(test_dir, folderName)
+        graph_path, gpu_worst_10pct = generate_graph(test_dir, folderName)
         if graph_path:
             print("[GRAPH] Success.")
         else:
             print("[GRAPH] Failed.")
-        _write_ci_outputs(avg_gpu, folderName)
+        _write_ci_outputs(gpu_worst_10pct, folderName)
 
         # Quest screencap captures both eyes side-by-side and each eye is
         # tilted, so crop to left eye, rotate to straighten, then trim
@@ -682,6 +749,8 @@ def main():
         extra["commit_ref"] = args.commit_ref
 
     if do_upload:
+        _write_runner_logs_zip(test_dir)
+
         print("[UPLOAD] Uploading files to Google Drive...")
         try:
             mp4_drive_link = upload_to_drive(test_dir, folderName)
@@ -695,7 +764,7 @@ def main():
 
         print("[UPLOAD] Uploading files to GitHub Pages...")
         try:
-            success = upload_to_github(test_dir, folderName, avg_gpu, mp4_drive_link, has_thumbnail, args.started_by, extra)
+            success = upload_to_github(test_dir, folderName, gpu_worst_10pct, mp4_drive_link, has_thumbnail, args.started_by, extra)
             if success:
                 print("[UPLOAD] GitHub upload success.")
             else:

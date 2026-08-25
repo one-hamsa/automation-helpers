@@ -5,8 +5,10 @@ setlocal EnableDelayedExpansion
 set "PATH=C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Data\PlaybackEngines\AndroidPlayer\SDK\platform-tools;%PATH%"
 
 :: --- CONFIGURATION START ---
-set "ROOT_DIR=E:\Automation\UNDERDOGS Bots Automation\Tests Data"
-set "LOG_FILES_DIR=E:\Automation\UNDERDOGS Bots Automation\Log Files"
+:: "Run Both Tests.bat" owns both of these and passes them down, because it is the one that
+:: reports and uploads at the end of the run. These values are the standalone fallback.
+if not defined ROOT_DIR set "ROOT_DIR=E:\Automation\UNDERDOGS Bots Automation\Tests Data"
+if not defined LOG_FILES_DIR set "LOG_FILES_DIR=E:\Automation\UNDERDOGS Bots Automation\Log Files"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
 :: The game polls this file (AutomationControl) and acts on the word in it: "report" sends an
 :: in-game report, "quit" quits the app. Any development build reads it - unlike the il2cpplab
@@ -65,8 +67,13 @@ if not defined DRIVE_FOLDER_NAME set "DRIVE_FOLDER_NAME=BOTS TEST - Name(-) - St
 if "!DRIVE_FOLDER_NAME!"=="" set "DRIVE_FOLDER_NAME=BOTS TEST - Name(-) - Started at(!TIMESTAMP!)"
 if "!DRIVE_FOLDER_NAME!"==" " set "DRIVE_FOLDER_NAME=BOTS TEST - Name(-) - Started at(!TIMESTAMP!)"
 
-:: The directory
-set "CURRENT_TEST_DIR=%ROOT_DIR%\%DRIVE_FOLDER_NAME%"
+:: The directory. Inherited when "Run Both Tests.bat" launched this, so both runners and
+:: the upload all land in the one folder it created.
+if defined BOT_TEST_DIR (
+    set "CURRENT_TEST_DIR=!BOT_TEST_DIR!"
+) else (
+    set "CURRENT_TEST_DIR=%ROOT_DIR%\!DRIVE_FOLDER_NAME!"
+)
 
 echo ========================================================
 echo        STARTING UNDERDOGS TEST
@@ -405,12 +412,8 @@ if defined IL2CPPLAB_TOOL_DIR (
 )
 
 
-:: ************************************************   10. GENERATE GRAPH AND UPLOAD FILES   ************************************************
-echo ...
-echo [10/10] Generating App CPU Time graph...
-echo ...
-
-python "%~dp0UploadFiles.py" "%CURRENT_TEST_DIR%" "%DRIVE_FOLDER_NAME%" --started-by "%STARTED_BY%" --num-pc-bots "%NUM_PC_BOTS%" --commit-sha "%COMMIT_SHA%" --commit-ref "%COMMIT_REF%" --github-token "%AUTOMATION_REPOS_PAT%"
+:: The graph, the functionality checks and the upload run from "Run Both Tests.bat" once
+:: both runners have finished, so that they see the Steam client's session log too.
 
 :: ************************************************    RESETTING EVERYTHING BACK AGAIN   ************************************************
 
@@ -436,7 +439,6 @@ adb shell input keyevent KEYCODE_SLEEP
 echo done > "%SYNC_DIR%\QUEST_DONE"
 
 echo ========================================================
-echo                  TEST COMPLETE
-echo    Files saved locally in: %CURRENT_TEST_DIR%
-echo    Files saved in google drive in: %DRIVE_FOLDER_NAME%
+echo                  QUEST TEST COMPLETE
+echo    Files collected in: %CURRENT_TEST_DIR%
 echo ========================================================
