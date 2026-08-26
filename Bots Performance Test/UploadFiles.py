@@ -19,6 +19,7 @@ import json
 import base64
 import io
 import math
+import statistics
 import re
 import zipfile
 import argparse
@@ -133,11 +134,6 @@ SYMBOL_PARSER_DIR = "Symbol Parser"
 # alone is several MB, which is permanent weight in the GitHub Pages repo.
 RUNNER_LOGS_ZIP = "Runner Logs.zip"
 
-# The Steam client's session log, copied in by "PC Bots Runner.bat" as the .udlog the
-# game zips on a graceful quit. Same file set as the Quest's "Report Logs", so the same
-# parsers read it.
-PC_LOGS_DIR = "PC Logs"
-
 # The run's functionality verdicts, written by Analysis/functionality_checks.py.
 CHECKS_JSON = "functionality.json"
 
@@ -163,22 +159,16 @@ GITHUB_HEADERS = {
 }
 
 
-# The run is judged on its worst tenth, not on its average: a handful of bad seconds is
-# what a player feels, and an average buries them. Both numbers describe that same worst
-# 10% of the run, from opposite ends - FPS is bad when low, App T when high. Taking the
-# high end of FPS would report the smoothest part of the run and hide the stutter.
-# The OVR CSV samples once per second and there are only ~90 samples in the window, so a
-# deeper percentile (p99 / "1% low") would just be the single worst sample.
-FPS_PERCENTILE = 10
-APP_TIME_PERCENTILE = 90
-
-
-def percentile(values, q):
-    """Nearest-rank percentile: q% of the samples are at or below the value returned.
-    No interpolation, so the result is always a real sample from the run."""
-    ordered = sorted(values)
-    rank = max(1, math.ceil(q / 100 * len(ordered)))
-    return ordered[rank - 1]
+def metric_stats(values, lower_is_better):
+    """Average, median, and the difference between them - App T average minus median,
+    FPS median minus average. A higher difference means more spikes."""
+    average = sum(values) / len(values)
+    median = statistics.median(values)
+    return {
+        "average": average,
+        "median": median,
+        "diff": (average - median) if lower_is_better else (median - average),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -229,21 +219,21 @@ def read_metric_series(test_dir, column):
     return list(times_sec), list(values)
 
 
-def compute_app_time_worst_10pct(test_dir):
-    """App T (app GPU time, microseconds) of the run's worst tenth - the value 10% of the
-    samples were at or above. None if unavailable."""
+def compute_app_time_stats(test_dir):
+    """App T (app GPU time, microseconds) average, median and their difference.
+    None if unavailable."""
     _, values = read_metric_series(test_dir, "app_gpu_time_microseconds")
     if not values:
         return None
-    value = percentile(values, APP_TIME_PERCENTILE)
-    print(f"  App T - worst 10%: {value:.0f} us "
-          f"(over {len(values)} samples after 60s, average was {sum(values) / len(values):.0f})")
-    return value
+    stats = metric_stats(values, lower_is_better=True)
+    print(f"  App T - average: {stats['average']:.0f} us, median: {stats['median']:.0f} us, "
+          f"difference: {stats['diff']:.0f} us (over {len(values)} samples after 60s)")
+    return stats
 
 
 def generate_graph(test_dir, folderName):
     """Read the CSV and produce a fps Utilization line chart.
-    Returns (graph_path, fps_worst_10pct) or (None, None) on failure.
+    Returns (graph_path, fps_stats) or (None, None) on failure.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -255,16 +245,17 @@ def generate_graph(test_dir, folderName):
 
     print(f"  Plotting {len(times_sec)} data points (after 60s)...")
 
-    worst_10pct_val = percentile(fps_values, FPS_PERCENTILE)
+    stats = metric_stats(fps_values, lower_is_better=False)
     min_val = min(fps_values)
     max_val = max(fps_values)
-    print(f"  FPS - worst 10%: {worst_10pct_val:.0f} (over {len(fps_values)} samples after 60s, "
-          f"average was {sum(fps_values) / len(fps_values):.1f})")
+    print(f"  FPS - average: {stats['average']:.1f}, median: {stats['median']:.1f}, "
+          f"difference: {stats['diff']:.1f} (over {len(fps_values)} samples after 60s)")
 
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(times_sec, fps_values, linewidth=1.2, color="#2563eb", label="FPS")
     # The headline number gets the emphatic line - it is what the run is judged on.
-    ax.axhline(y=worst_10pct_val, color="#16a34a", linestyle="--", linewidth=1.2, label=f"Worst 10%: {worst_10pct_val:.0f}")
+    ax.axhline(y=stats["average"], color="#16a34a", linestyle="--", linewidth=1.2, label=f"Average: {stats['average']:.1f}")
+    ax.axhline(y=stats["median"], color="#7c3aed", linestyle="--", linewidth=1.2, label=f"Median: {stats['median']:.1f}")
     ax.axhline(y=min_val, color="#0891b2", linestyle=":",  linewidth=1.2, label=f"Min: {min_val:.0f}")
     ax.axhline(y=max_val, color="#dc2626", linestyle=":",  linewidth=1.2, label=f"Max: {max_val:.0f}")
 
@@ -280,7 +271,7 @@ def generate_graph(test_dir, folderName):
     plt.close(fig)
 
     print(f"  Graph saved: {out_path}")
-    return out_path, worst_10pct_val
+    return out_path, stats
 
 
 # ---------------------------------------------------------------------------
@@ -430,18 +421,6 @@ def upload_to_drive(test_dir, folderName):
             print("  WARNING: 'Report Logs' folder exists but no files found inside!")
         else:
             print(f"  Uploaded {log_file_count} log file(s) to Drive.")
-
-    # The Steam client's session log - one .udlog from the instance that was quit
-    # gracefully, so it holds a complete session rather than a truncated one.
-    pc_logs_dir = os.path.join(test_dir, PC_LOGS_DIR)
-    if os.path.isdir(pc_logs_dir):
-        print(f"  Uploading '{PC_LOGS_DIR}' folder to Drive...")
-        pc_folder_id = create_drive_folder(service, PC_LOGS_DIR, folder_id)
-        pc_count = _upload_dir_flat(service, pc_logs_dir, pc_folder_id)
-        if pc_count == 0:
-            print(f"  WARNING: '{PC_LOGS_DIR}' folder exists but no files found inside!")
-        else:
-            print(f"  Uploaded {pc_count} Steam log file(s) to Drive.")
 
     checks_path = os.path.join(test_dir, CHECKS_JSON)
     if os.path.isfile(checks_path):
@@ -770,7 +749,7 @@ def _read_log_stats(test_dir):
     return errors, exceptions
 
 
-def _write_ci_outputs(fps_worst_10pct, app_time_worst_10pct):
+def _write_ci_outputs(fps_stats, app_time_stats):
     """Publish the run's headline metrics as GitHub Actions step outputs so the
     workflow can threshold-check them without re-reading the test folder.
     No-op outside CI (GITHUB_OUTPUT unset), and never fails the run.
@@ -780,11 +759,15 @@ def _write_ci_outputs(fps_worst_10pct, app_time_worst_10pct):
         return
     try:
         with open(out_path, "a", encoding="utf-8") as f:
-            if fps_worst_10pct is not None:
-                f.write(f"fps_worst_10pct={fps_worst_10pct:.1f}\n")
-            if app_time_worst_10pct is not None:
-                f.write(f"app_time_worst_10pct={app_time_worst_10pct:.0f}\n")
-        print(f"[CI] Wrote fps_worst_10pct / app_time_worst_10pct to {out_path}")
+            if fps_stats is not None:
+                f.write(f"fps_average={fps_stats['average']:.1f}\n")
+                f.write(f"fps_median={fps_stats['median']:.1f}\n")
+                f.write(f"fps_diff={fps_stats['diff']:.1f}\n")
+            if app_time_stats is not None:
+                f.write(f"app_time_average={app_time_stats['average']:.0f}\n")
+                f.write(f"app_time_median={app_time_stats['median']:.0f}\n")
+                f.write(f"app_time_diff={app_time_stats['diff']:.0f}\n")
+        print(f"[CI] Wrote the FPS / App T average, median and difference to {out_path}")
     except Exception as e:
         print(f"[CI] WARNING: Could not write step outputs: {e}")
 
@@ -806,13 +789,18 @@ def _write_ci_checks(checks):
         print(f"[CI] WARNING: Could not write the checks output: {e}")
 
 
-def _build_metadata(folder_name, fps_worst_10pct, app_time_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _build_metadata(folder_name, fps_stats, app_time_stats, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     test_name, timestamp = _parse_folder_name(folder_name)
+    def _fmt(stats, key, places):
+        return f"{stats[key]:.{places}f}" if stats is not None else "N/A"
     entry = {
-        # The worst tenth of the run, not its average - see FPS_PERCENTILE above.
-        "fps_worst_10pct": f"{fps_worst_10pct:.0f}" if fps_worst_10pct is not None else "N/A",
+        "fps_average": _fmt(fps_stats, "average", 1),
+        "fps_median": _fmt(fps_stats, "median", 1),
+        "fps_diff": _fmt(fps_stats, "diff", 1),
         # App T (app GPU time) in microseconds, same metric the GPU automation test reports.
-        "app_time_worst_10pct": f"{app_time_worst_10pct:.0f}" if app_time_worst_10pct is not None else "N/A",
+        "app_time_average": _fmt(app_time_stats, "average", 0),
+        "app_time_median": _fmt(app_time_stats, "median", 0),
+        "app_time_diff": _fmt(app_time_stats, "diff", 0),
         "test_name": test_name,
         "timestamp": timestamp,
         "has_thumbnail": has_thumbnail,
@@ -823,19 +811,26 @@ def _build_metadata(folder_name, fps_worst_10pct, app_time_worst_10pct, drive_li
         entry["drive_link"] = drive_link
     if extra:
         entry.update(extra)
+    # Derived, never set by hand: retention reads this to decide whether the run's
+    # numbers are worth keeping once the artifacts are pruned. A run that produced no
+    # metrics is not a real data point either, however green its checks were.
+    checks = entry.get("checks") or []
+    entry["test_successful"] = bool(checks) and \
+        all(c.get("state") == "pass" for c in checks) and \
+        entry.get("fps_average") != "N/A"
     return entry
 
 
-def _save_local_metadata(test_dir, folder_name, fps_worst_10pct, app_time_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _save_local_metadata(test_dir, folder_name, fps_stats, app_time_stats, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Write metadata.json into the test folder on disk so it's readable offline."""
-    entry = _build_metadata(folder_name, fps_worst_10pct, app_time_worst_10pct, drive_link, has_thumbnail, started_by, extra)
+    entry = _build_metadata(folder_name, fps_stats, app_time_stats, drive_link, has_thumbnail, started_by, extra)
     local_path = os.path.join(test_dir, "metadata.json")
     with open(local_path, "w", encoding="utf-8") as f:
         json.dump(entry, f, indent=2)
     print(f"  Saved local metadata: {local_path}")
 
 
-def upload_to_github(test_dir, folderName, fps_worst_10pct, app_time_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def upload_to_github(test_dir, folderName, fps_stats, app_time_stats, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Publish one run to GitHub Pages as a single commit."""
     print(f"[GITHUB] Uploading run: {folderName}")
     prefix = f"AllTestRuns/{folderName}"
@@ -864,34 +859,21 @@ def upload_to_github(test_dir, folderName, fps_worst_10pct, app_time_worst_10pct
     if os.path.isdir(logs_dir):
         files[f"{prefix}/Report Logs.zip"] = _zip_bytes(logs_dir)
 
-    # One graceful-quit session, ~120 KB zipped - light enough for the Pages repo, and the
-    # only record of what the Steam client saw.
-    pc_logs_dir = os.path.join(test_dir, PC_LOGS_DIR)
-    if os.path.isdir(pc_logs_dir):
-        files[f"{prefix}/{PC_LOGS_DIR}.zip"] = _zip_bytes(pc_logs_dir)
-
-    # The verdicts are already in metadata.json; this carries what they were derived from
-    # (versions, room ids, player rosters) for anyone reading a past run.
-    checks_path = os.path.join(test_dir, CHECKS_JSON)
-    if os.path.isfile(checks_path):
-        with open(checks_path, "rb") as f:
-            files[f"{prefix}/{CHECKS_JSON}"] = f.read()
-
     if not files:
         print("  ERROR: No files found to upload.")
         return False
 
     # Metadata always goes up, even when a metric is missing (e.g. record-metrics
-    # wasn't enabled, so fps_worst_10pct is None) — whatever we do have puts the run on
+    # wasn't enabled, so fps_stats is None) — whatever we do have puts the run on
     # the dashboard, and the missing metric stays at its default ("N/A").
     try:
         # Save locally first so the metadata lives alongside the run data on disk
         # even if the GitHub upload fails.
-        _save_local_metadata(test_dir, folderName, fps_worst_10pct, app_time_worst_10pct, drive_link, has_thumbnail, started_by, extra)
+        _save_local_metadata(test_dir, folderName, fps_stats, app_time_stats, drive_link, has_thumbnail, started_by, extra)
     except Exception as e:
         print(f"  WARNING: Failed to save local metadata.json: {e}")
 
-    entry = _build_metadata(folderName, fps_worst_10pct, app_time_worst_10pct, drive_link, has_thumbnail, started_by, extra)
+    entry = _build_metadata(folderName, fps_stats, app_time_stats, drive_link, has_thumbnail, started_by, extra)
     files[f"{prefix}/metadata.json"] = json.dumps(entry, indent=2).encode("utf-8")
 
     try:
@@ -900,8 +882,8 @@ def upload_to_github(test_dir, folderName, fps_worst_10pct, app_time_worst_10pct
         print(f"[GITHUB] FAILED: {e}")
         return False
 
-    fps_str = f"{fps_worst_10pct:.0f}" if fps_worst_10pct is not None else "N/A"
-    app_time_str = f"{app_time_worst_10pct:.0f}" if app_time_worst_10pct is not None else "N/A"
+    fps_str = f"{fps_stats['average']:.1f}" if fps_stats is not None else "N/A"
+    app_time_str = f"{app_time_stats['average']:.0f}" if app_time_stats is not None else "N/A"
     print(f"  FPS - worst 10%: {fps_str}, App T - worst 10%: {app_time_str} us")
     print(f"[GITHUB] Done! View at: https://{GITHUB_REPO_OWNER}.github.io/{GITHUB_REPO_NAME}/")
     return True
@@ -943,22 +925,22 @@ def main():
     do_graph = not args.upload_only
     do_upload = not args.graph_only
 
-    fps_worst_10pct = None
-    app_time_worst_10pct = None
+    fps_stats = None
+    app_time_stats = None
     mp4_drive_link = None
     has_thumbnail = False
 
     if do_graph:
         print("[GRAPH] Generating App fps Time graph...")
-        graph_path, fps_worst_10pct = generate_graph(test_dir, folderName)
+        graph_path, fps_stats = generate_graph(test_dir, folderName)
         if graph_path:
             print("[GRAPH] Success.")
         else:
             print("[GRAPH] Failed.")
 
-        print("[METRICS] Computing the App T of the worst 10%...")
-        app_time_worst_10pct = compute_app_time_worst_10pct(test_dir)
-        _write_ci_outputs(fps_worst_10pct, app_time_worst_10pct)
+        print("[METRICS] Computing the App T average, median and difference...")
+        app_time_stats = compute_app_time_stats(test_dir)
+        _write_ci_outputs(fps_stats, app_time_stats)
 
         # Quest screencap captures both eyes side-by-side and each eye is
         # tilted, so crop to left eye, rotate to straighten, then trim
@@ -1100,7 +1082,7 @@ def main():
 
         print("[UPLOAD] Uploading files to GitHub Pages...")
         try:
-            success = upload_to_github(test_dir, folderName, fps_worst_10pct, app_time_worst_10pct, mp4_drive_link, has_thumbnail, args.started_by, extra)
+            success = upload_to_github(test_dir, folderName, fps_stats, app_time_stats, mp4_drive_link, has_thumbnail, args.started_by, extra)
             if success:
                 print("[UPLOAD] GitHub upload success.")
                 # Old unity profiler deprecated setup

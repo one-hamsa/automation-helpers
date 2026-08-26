@@ -19,6 +19,7 @@ import json
 import base64
 import io
 import math
+import statistics
 import re
 import zipfile
 import argparse
@@ -86,24 +87,21 @@ GITHUB_HEADERS = {
 # ---------------------------------------------------------------------------
 # Graph generation
 # ---------------------------------------------------------------------------
-# App T is judged on the run's slow tenth, not its average: a few bad seconds are what a
-# player feels, and an average buries them. Matches the bots test, which uses the same
-# percentile on the same OVR column. The CSV samples once per second, so a deeper
-# percentile (p99) would just be the single worst sample.
-APP_TIME_PERCENTILE = 90
-
-
-def percentile(values, q):
-    """Nearest-rank percentile: q% of the samples are at or below the value returned.
-    No interpolation, so the result is always a real sample from the run."""
-    ordered = sorted(values)
-    rank = max(1, math.ceil(q / 100 * len(ordered)))
-    return ordered[rank - 1]
+def metric_stats(values, lower_is_better):
+    """Average, median, and the difference between them - average minus median.
+    A higher difference means more spikes."""
+    average = sum(values) / len(values)
+    median = statistics.median(values)
+    return {
+        "average": average,
+        "median": median,
+        "diff": (average - median) if lower_is_better else (median - average),
+    }
 
 
 def generate_graph(test_dir, folderName):
     """Read the CSV and produce an App GPU Time line chart.
-    Returns (graph_path, gpu_worst_10pct) or (None, None) on failure.
+    Returns (graph_path, gpu_stats) or (None, None) on failure.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -149,16 +147,17 @@ def generate_graph(test_dir, folderName):
 
     print(f"  Plotting {len(times_sec)} data points (after 60s)...")
 
-    worst_10pct_val = percentile(gpu_times_ms, APP_TIME_PERCENTILE)
+    stats = metric_stats(gpu_times_ms, lower_is_better=True)
     min_val = min(gpu_times_ms)
     max_val = max(gpu_times_ms)
-    print(f"  App T - worst 10%: {worst_10pct_val:.0f} us (over {len(gpu_times_ms)} samples "
-          f"after 60s, average was {sum(gpu_times_ms) / len(gpu_times_ms):.0f})")
+    print(f"  App T - average: {stats['average']:.0f} us, median: {stats['median']:.0f} us, "
+          f"difference: {stats['diff']:.0f} us (over {len(gpu_times_ms)} samples after 60s)")
 
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(times_sec, gpu_times_ms, linewidth=1.2, color="#2563eb", label="App GPU Time")
     # The headline number gets the emphatic line - it is what the run is judged on.
-    ax.axhline(y=worst_10pct_val, color="#16a34a", linestyle="--", linewidth=1.2, label=f"Worst 10%: {worst_10pct_val:.0f}")
+    ax.axhline(y=stats["average"], color="#16a34a", linestyle="--", linewidth=1.2, label=f"Average: {stats['average']:.0f}")
+    ax.axhline(y=stats["median"], color="#7c3aed", linestyle="--", linewidth=1.2, label=f"Median: {stats['median']:.0f}")
     ax.axhline(y=min_val, color="#0891b2", linestyle=":",  linewidth=1.2, label=f"Min: {min_val:.0f}")
     ax.axhline(y=max_val, color="#dc2626", linestyle=":",  linewidth=1.2, label=f"Max: {max_val:.0f}")
 
@@ -174,7 +173,7 @@ def generate_graph(test_dir, folderName):
     plt.close(fig)
 
     print(f"  Graph saved: {out_path}")
-    return out_path, worst_10pct_val
+    return out_path, stats
 
 
 # ---------------------------------------------------------------------------
@@ -524,14 +523,16 @@ def _parse_folder_name(folder_name):
     return test_name, scene_name, timestamp
 
 
-def _write_ci_outputs(gpu_worst_10pct, folder_name):
-    """Append the worst-10% App GPU Time (microseconds) to GPU_METRICS_FILE so the
-    workflow can threshold-check it without re-reading the test folder. A file rather
-    than a step output because a sweep runs this script once per level, and a step
-    output would keep only the last level's number. Empty value = no metric produced.
-    No-op outside CI (env var unset), and never fails the run.
+def _write_ci_outputs(gpu_stats, folder_name):
+    """Append one tab-separated row per level - label, average, median, difference - to
+    GPU_METRICS_FILE. A file rather than a step output because a sweep runs this script
+    once per level, and a step output would keep only the last level's number. Empty
+    values = no metric produced. No-op outside CI, and never fails the run.
     """
-    value = "" if gpu_worst_10pct is None else f"{gpu_worst_10pct:.0f}"
+    if gpu_stats is None:
+        values = ["", "", ""]
+    else:
+        values = [f"{gpu_stats[k]:.0f}" for k in ("average", "median", "diff")]
 
     metrics_path = os.environ.get("GPU_METRICS_FILE")
     if metrics_path:
@@ -541,18 +542,22 @@ def _write_ci_outputs(gpu_worst_10pct, folder_name):
         label = scene_name or test_name or "-"
         try:
             with open(metrics_path, "a", encoding="utf-8") as f:
-                f.write(f"{label}\t{value}\n")
+                f.write(label + "\t" + "\t".join(values) + "\n")
             print(f"[CI] Appended '{label}' metrics to {metrics_path}")
         except Exception as e:
             print(f"[CI] WARNING: Could not append run metrics: {e}")
 
 
-def _build_metadata(folder_name, gpu_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _build_metadata(folder_name, gpu_stats, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     test_name, scene_name, timestamp = _parse_folder_name(folder_name)
 
+    def _fmt(key):
+        return f"{gpu_stats[key]:.0f}" if gpu_stats is not None else "N/A"
+
     entry = {
-        # The slow tenth of the run - see APP_TIME_PERCENTILE above.
-        "gpu_worst_10pct": f"{gpu_worst_10pct:.0f}" if gpu_worst_10pct is not None else "N/A",
+        "gpu_average": _fmt("average"),
+        "gpu_median": _fmt("median"),
+        "gpu_diff": _fmt("diff"),
         "test_name": test_name,
         "scene_name": scene_name,
         "timestamp": timestamp,
@@ -564,19 +569,24 @@ def _build_metadata(folder_name, gpu_worst_10pct, drive_link=None, has_thumbnail
         entry["drive_link"] = drive_link
     if extra:
         entry.update(extra)
+    # Derived, never set by hand: retention reads this to decide whether the run's
+    # numbers are worth keeping once the artifacts are pruned. The GPU sweep has no
+    # functionality checks, so producing a metric at all is the bar - a level that
+    # never rendered records nothing.
+    entry["test_successful"] = entry.get("gpu_average") not in (None, "N/A")
     return entry
 
 
-def _save_local_metadata(test_dir, folder_name, gpu_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def _save_local_metadata(test_dir, folder_name, gpu_stats, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Write metadata.json into the test folder on disk so it's readable offline."""
-    entry = _build_metadata(folder_name, gpu_worst_10pct, drive_link, has_thumbnail, started_by, extra)
+    entry = _build_metadata(folder_name, gpu_stats, drive_link, has_thumbnail, started_by, extra)
     local_path = os.path.join(test_dir, "metadata.json")
     with open(local_path, "w", encoding="utf-8") as f:
         json.dump(entry, f, indent=2)
     print(f"  Saved local metadata: {local_path}")
 
 
-def upload_to_github(test_dir, folderName, gpu_worst_10pct, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
+def upload_to_github(test_dir, folderName, gpu_stats, drive_link=None, has_thumbnail=False, started_by="unknown", extra=None):
     """Publish one run to GitHub Pages as a single commit."""
     print(f"[GITHUB] Uploading run: {folderName}")
     prefix = f"AllTestRuns/{folderName}"
@@ -605,16 +615,16 @@ def upload_to_github(test_dir, folderName, gpu_worst_10pct, drive_link=None, has
         return False
 
     # Metadata always goes up, even when a metric is missing (e.g. record-metrics
-    # wasn't enabled, so gpu_worst_10pct is None) — whatever we do have puts the run on
+    # wasn't enabled, so gpu_stats is None) — whatever we do have puts the run on
     # the dashboard, and the missing metric stays at its default ("N/A").
     try:
         # Save locally first so the metadata lives alongside the run data on disk
         # even if the GitHub upload fails.
-        _save_local_metadata(test_dir, folderName, gpu_worst_10pct, drive_link, has_thumbnail, started_by, extra)
+        _save_local_metadata(test_dir, folderName, gpu_stats, drive_link, has_thumbnail, started_by, extra)
     except Exception as e:
         print(f"  WARNING: Failed to save local metadata.json: {e}")
 
-    entry = _build_metadata(folderName, gpu_worst_10pct, drive_link, has_thumbnail, started_by, extra)
+    entry = _build_metadata(folderName, gpu_stats, drive_link, has_thumbnail, started_by, extra)
     files[f"{prefix}/metadata.json"] = json.dumps(entry, indent=2).encode("utf-8")
 
     try:
@@ -623,7 +633,7 @@ def upload_to_github(test_dir, folderName, gpu_worst_10pct, drive_link=None, has
         print(f"[GITHUB] FAILED: {e}")
         return False
 
-    gpu_str = f"{gpu_worst_10pct:.0f}" if gpu_worst_10pct is not None else "N/A"
+    gpu_str = f"{gpu_stats['average']:.0f}" if gpu_stats is not None else "N/A"
     print(f"  avg GPU: {gpu_str} us")
     print(f"[GITHUB] Done! View at: https://{GITHUB_REPO_OWNER}.github.io/{GITHUB_REPO_NAME}/")
     return True
@@ -666,18 +676,18 @@ def main():
     do_graph = not args.upload_only
     do_upload = not args.graph_only
 
-    gpu_worst_10pct = None
+    gpu_stats = None
     mp4_drive_link = None
     has_thumbnail = False
 
     if do_graph:
         print("[GRAPH] Generating App GPU Time graph...")
-        graph_path, gpu_worst_10pct = generate_graph(test_dir, folderName)
+        graph_path, gpu_stats = generate_graph(test_dir, folderName)
         if graph_path:
             print("[GRAPH] Success.")
         else:
             print("[GRAPH] Failed.")
-        _write_ci_outputs(gpu_worst_10pct, folderName)
+        _write_ci_outputs(gpu_stats, folderName)
 
         # Quest screencap captures both eyes side-by-side and each eye is
         # tilted, so crop to left eye, rotate to straighten, then trim
@@ -764,7 +774,7 @@ def main():
 
         print("[UPLOAD] Uploading files to GitHub Pages...")
         try:
-            success = upload_to_github(test_dir, folderName, gpu_worst_10pct, mp4_drive_link, has_thumbnail, args.started_by, extra)
+            success = upload_to_github(test_dir, folderName, gpu_stats, mp4_drive_link, has_thumbnail, args.started_by, extra)
             if success:
                 print("[UPLOAD] GitHub upload success.")
             else:
