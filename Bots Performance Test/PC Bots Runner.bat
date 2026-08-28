@@ -91,11 +91,12 @@ for /L %%i in (1,1,%INSTANCE_COUNT%) do (
     :: launched. Paths go through the environment - several of them contain spaces, and
     :: quoting them through cmd into -Command is what breaks first.
     powershell -NoProfile -ExecutionPolicy Bypass -Command "$log = Join-Path $env:PC_BOT_LOGS_DIR ('bot_' + $env:BOT_INDEX + '.log'); $q = [char]34; $p = Start-Process -FilePath (Join-Path $env:BUILD_DIR $env:EXE_NAME) -ArgumentList ('-batchmode -nographics -noaudio -logFile ' + $q + $log + $q) -WorkingDirectory $env:BUILD_DIR -PassThru; Start-Sleep -Milliseconds 500; if (Test-Path $env:NIRCMD) { & $env:NIRCMD muteappvolume ('/' + $p.Id) 1 }; Write-Host ('   PID ' + $p.Id + ' -> ' + $log)"
-    :: delay between launches to avoid file-lock conflicts
-    ping 127.0.0.1 -n !LAUNCH_PING_COUNT! >nul
+    :: delay between launches to avoid file-lock conflicts. Skipped after the last one -
+    :: the headset is held back until the signal below, so a trailing wait here delays it.
+    if %%i LSS !INSTANCE_COUNT! ping 127.0.0.1 -n !LAUNCH_PING_COUNT! >nul
 )
 
-:: Releases "Run Both Tests.bat", which then waits out its delay before starting the headset.
+:: Releases "Run Both Tests.bat", which starts the headset as soon as it sees this.
 echo launched > "%SYNC_DIR%\PC_BOTS_LAUNCHED"
 
 echo All %INSTANCE_COUNT% instances launched. Waiting for Quest game to stop...
