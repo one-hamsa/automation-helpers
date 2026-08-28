@@ -406,16 +406,24 @@ def upload_to_drive(test_dir, folderName):
     if os.path.isdir(report_logs_dir):
         print(f"  Uploading 'Report Logs' folder to Drive...")
         logs_folder_id = create_drive_folder(service, "Report Logs", folder_id)
-        # adb pull creates a timestamped subfolder inside Report Logs,
-        # so collect all files recursively and upload them flat into
-        # the "Report Logs" Drive folder.
+        # Mirrored rather than flattened: the PC bots each write a "Player.log", and only
+        # the "Bot_<n>_Logs" directory around it says which instance it came from.
+        drive_dirs = {report_logs_dir: logs_folder_id}
+
+        def drive_folder_for(dirpath):
+            if dirpath not in drive_dirs:
+                parent_id = drive_folder_for(os.path.dirname(dirpath))
+                drive_dirs[dirpath] = create_drive_folder(service, os.path.basename(dirpath), parent_id)
+            return drive_dirs[dirpath]
+
         log_file_count = 0
         for dirpath, _, filenames in os.walk(report_logs_dir):
             for fname in filenames:
                 file_path = os.path.join(dirpath, fname)
                 file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                print(f"    Uploading log: {fname} ({file_size_mb:.1f} MB)...")
-                upload_file_drive(service, file_path, logs_folder_id)
+                rel = os.path.relpath(file_path, report_logs_dir).replace("\\", "/")
+                print(f"    Uploading log: {rel} ({file_size_mb:.1f} MB)...")
+                upload_file_drive(service, file_path, drive_folder_for(dirpath))
                 log_file_count += 1
         if log_file_count == 0:
             print("  WARNING: 'Report Logs' folder exists but no files found inside!")

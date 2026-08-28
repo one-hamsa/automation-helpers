@@ -82,13 +82,44 @@ set "BOT_COMMIT_SHA=!COMMIT_SHA!"
 set "BOT_COMMIT_REF=!COMMIT_REF!"
 :: UploadFiles.py zips the runner logs out of this.
 set "LOG_FILES_DIR=!LOG_DIR!"
+:: Where the PC runner points each instance's -logFile. Staged outside the test folder and
+:: collected below, because the Quest runner's "adb pull" has to be what creates
+:: "Report Logs" - pulling into a directory that already exists nests the session one level
+:: deeper than the report expects.
+set "PC_BOT_LOGS_DIR=%SYNC_DIR%\pc_bot_logs"
 
-:: Launch both runners in parallel.
+:: The PC instances go first, the headset follows as soon as they are all up. No settling
+:: delay on top of that - the Quest runner already waits 60s after launching the game before
+:: it records anything, which the bots spend joining.
+:: Both runners still run in parallel once started; the ordering is enforced here rather
+:: than by the runners signalling each other.
 :: /B = no new window (avoids QuickEdit freezing when the window is clicked).
 :: Output goes to log files so we can review them after the run.
+:: "< nul" on this one too: the PC runner "pause"s if the build exe is missing, and with the
+:: headset now waiting behind it that would hang the whole run instead of just its own half.
+start /B cmd /c ""%~dp0PC Bots Runner.bat"  "!PC_BUILD_DIR!" !NUMBER_OF_PC_BOTS! < nul > "!PC_LOG!" 2>&1"
+
+:: Bounded, because this runner is a shared resource - the concurrency group holds every
+:: other automation run behind this one, so waiting out the job's 30-minute timeout costs
+:: far more than starting the headset into a room the PC bots never reached.
+call :say PC bots launching. Waiting for them to all come up...
+set "PC_LAUNCH_WAIT=0"
+:WAIT_PC_LAUNCHED
+if not exist "%SYNC_DIR%\PC_BOTS_LAUNCHED" (
+    if !PC_LAUNCH_WAIT! GEQ 300 (
+        call :say WARNING: PC bots did not report launched after !PC_LAUNCH_WAIT!s - starting the headset anyway.
+        goto PC_LAUNCH_DONE
+    )
+    ping 127.0.0.1 -n 4 >nul
+    set /a PC_LAUNCH_WAIT+=3
+    goto WAIT_PC_LAUNCHED
+)
+:PC_LAUNCH_DONE
+
+call :say All PC bots launched. Starting the headset.
+
 :: "< nul" prevents Quest bat's "pause" from hanging in CI.
 start /B cmd /c ""%~dp0Quest Bots Runner.bat" < nul > "!QUEST_LOG!" 2>&1"
-start /B cmd /c ""%~dp0PC Bots Runner.bat"  "!PC_BUILD_DIR!" !NUMBER_OF_PC_BOTS! > "!PC_LOG!" 2>&1"
 
 call :say Both tests launched. Waiting for both to complete...
 
@@ -105,6 +136,26 @@ ping 127.0.0.1 -n 3 >nul
 :: Fold both runners into the master log, and print them so CI sees them.
 call :append_section "QUEST LOG" "!QUEST_LOG!"
 call :append_section "PC LOG" "!PC_LOG!"
+
+:: Collect the PC instances' player logs into the test folder, one directory per bot, so
+:: they ship with the results the same way the headset's pulled logs do. After both runners
+:: are done: the instances are killed by then, so the files are closed, and the Quest
+:: runner's pull has already created "Report Logs".
+call :blank
+call :say ======================== PC BOT LOGS ========================
+set "PC_LOGS_DEST=!BOT_TEST_DIR!\Report Logs\PC Bots Logs"
+set "PC_LOGS_FOUND=0"
+:: Driven by the files on disk rather than NUMBER_OF_PC_BOTS, so a clamped count or an
+:: instance that never launched needs no special case here.
+for %%f in ("!PC_BOT_LOGS_DIR!\bot_*.log") do (
+    set "BOT_ID=%%~nf"
+    set "BOT_ID=!BOT_ID:bot_=!"
+    mkdir "!PC_LOGS_DEST!\Bot_!BOT_ID!_Logs" 2>nul
+    copy /y "%%f" "!PC_LOGS_DEST!\Bot_!BOT_ID!_Logs\Player.log" >nul
+    call :say   Bot_!BOT_ID!_Logs\Player.log: %%~zf bytes
+    set /a PC_LOGS_FOUND+=1
+)
+if "!PC_LOGS_FOUND!"=="0" call :say   No PC bot logs in "!PC_BOT_LOGS_DIR!" - nothing to collect.
 
 :: ***********************************   REPORT AND UPLOAD   ***********************************
 :: Runs here rather than inside the Quest runner, so that everything the report reads is
