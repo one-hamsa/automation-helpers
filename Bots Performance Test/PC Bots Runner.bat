@@ -90,7 +90,11 @@ for /L %%i in (1,1,%INSTANCE_COUNT%) do (
     :: PowerShell rather than "start", because muting needs the PID of the process just
     :: launched. Paths go through the environment - several of them contain spaces, and
     :: quoting them through cmd into -Command is what breaks first.
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$log = Join-Path $env:PC_BOT_LOGS_DIR ('bot_' + $env:BOT_INDEX + '.log'); $q = [char]34; $p = Start-Process -FilePath (Join-Path $env:BUILD_DIR $env:EXE_NAME) -ArgumentList ('-batchmode -nographics -noaudio -logFile ' + $q + $log + $q) -WorkingDirectory $env:BUILD_DIR -PassThru; Start-Sleep -Milliseconds 500; if (Test-Path $env:NIRCMD) { & $env:NIRCMD muteappvolume ('/' + $p.Id) 1 }; Write-Host ('   PID ' + $p.Id + ' -> ' + $log)"
+    :: Launch flags and mute timing are kept identical to the Bots Station's run-bots.ps1, which
+    :: is the version known to run silently. The one thing that script has and this chain does
+    :: not is elevation - it re-launches itself as Administrator, so its nircmd runs elevated -
+    :: hence the RunAs here, the same way the firewall rule above is elevated.
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$log = Join-Path $env:PC_BOT_LOGS_DIR ('bot_' + $env:BOT_INDEX + '.log'); $q = [char]34; $p = Start-Process -FilePath (Join-Path $env:BUILD_DIR $env:EXE_NAME) -ArgumentList ('-batchmode -nographics -logFile ' + $q + $log + $q) -WorkingDirectory $env:BUILD_DIR -NoNewWindow -PassThru; Start-Sleep -Milliseconds 500; if (Test-Path $env:NIRCMD) { Start-Process -FilePath $env:NIRCMD -ArgumentList @('muteappvolume', ('/' + $p.Id), '1') -Verb RunAs -Wait }; Write-Host ('   PID ' + $p.Id + ' -> ' + $log)"
     :: delay between launches to avoid file-lock conflicts. Skipped after the last one -
     :: the headset is held back until the signal below, so a trailing wait here delays it.
     if %%i LSS !INSTANCE_COUNT! ping 127.0.0.1 -n !LAUNCH_PING_COUNT! >nul
