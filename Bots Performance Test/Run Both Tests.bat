@@ -137,22 +137,23 @@ ping 127.0.0.1 -n 3 >nul
 call :append_section "QUEST LOG" "!QUEST_LOG!"
 call :append_section "PC LOG" "!PC_LOG!"
 
-:: Collect the PC instances' player logs into the test folder, one directory per bot, so
-:: they ship with the results the same way the headset's pulled logs do. After both runners
-:: are done: the instances are killed by then, so the files are closed, and the Quest
-:: runner's pull has already created "Report Logs".
+:: Collect the PC instances' player logs into the test folder so they ship with the results
+:: the same way the headset's pulled logs do. The launch number in the file name is what
+:: identifies the instance, so the logs sit directly in the folder rather than each in one
+:: of its own. After both runners are done: the instances are killed by then, so the files
+:: are closed, and the Quest runner's pull has already created "Report Logs".
 call :blank
 call :say ======================== PC BOT LOGS ========================
 set "PC_LOGS_DEST=!BOT_TEST_DIR!\Report Logs\PC Bots Logs"
 set "PC_LOGS_FOUND=0"
 :: Driven by the files on disk rather than NUMBER_OF_PC_BOTS, so a clamped count or an
 :: instance that never launched needs no special case here.
+mkdir "!PC_LOGS_DEST!" 2>nul
 for %%f in ("!PC_BOT_LOGS_DIR!\bot_*.log") do (
     set "BOT_ID=%%~nf"
     set "BOT_ID=!BOT_ID:bot_=!"
-    mkdir "!PC_LOGS_DEST!\Bot_!BOT_ID!_Logs" 2>nul
-    copy /y "%%f" "!PC_LOGS_DEST!\Bot_!BOT_ID!_Logs\Player.log" >nul
-    call :say   Bot_!BOT_ID!_Logs\Player.log: %%~zf bytes
+    copy /y "%%f" "!PC_LOGS_DEST!\Bot_!BOT_ID!.log" >nul
+    call :say   Bot_!BOT_ID!.log: %%~zf bytes
     set /a PC_LOGS_FOUND+=1
 )
 if "!PC_LOGS_FOUND!"=="0" call :say   No PC bot logs in "!PC_BOT_LOGS_DIR!" - nothing to collect.

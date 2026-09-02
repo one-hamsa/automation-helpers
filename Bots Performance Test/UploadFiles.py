@@ -406,8 +406,8 @@ def upload_to_drive(test_dir, folderName):
     if os.path.isdir(report_logs_dir):
         print(f"  Uploading 'Report Logs' folder to Drive...")
         logs_folder_id = create_drive_folder(service, "Report Logs", folder_id)
-        # Mirrored rather than flattened: the PC bots each write a "Player.log", and only
-        # the "Bot_<n>_Logs" directory around it says which instance it came from.
+        # Mirrored rather than flattened, so the subfolders "Report Logs" is collected into
+        # (the headset's pulled logs, the PC bots' logs) survive the upload.
         drive_dirs = {report_logs_dir: logs_folder_id}
 
         def drive_folder_for(dirpath):
