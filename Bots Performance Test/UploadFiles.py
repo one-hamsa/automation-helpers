@@ -780,6 +780,23 @@ def _write_ci_outputs(fps_stats, app_time_stats):
         print(f"[CI] WARNING: Could not write step outputs: {e}")
 
 
+def _write_ci_log_stats(errors, exceptions):
+    """Publish the run's error / exception totals as step outputs, so the workflow can
+    threshold-check them alongside the performance numbers. No-op outside CI (or when the
+    run produced no findings CSV), and never fails the run.
+    """
+    out_path = os.environ.get("GITHUB_OUTPUT")
+    if not out_path or errors is None:
+        return
+    try:
+        with open(out_path, "a", encoding="utf-8") as f:
+            f.write(f"errors={errors}\n")
+            f.write(f"exceptions={exceptions}\n")
+        print(f"[CI] Wrote the error / exception totals to {out_path}")
+    except Exception as e:
+        print(f"[CI] WARNING: Could not write the log-stats outputs: {e}")
+
+
 def _write_ci_checks(checks):
     """Publish the functionality verdicts as a step output, so the nightly report renders
     the same checklist the dashboard shows. Compact JSON on one line - a step output
@@ -1066,6 +1083,7 @@ def main():
     if expected_players is not None:
         extra["bots_requested"] = expected_players
     errors, exceptions = _read_log_stats(test_dir)
+    _write_ci_log_stats(errors, exceptions)
     if errors is not None:
         extra["errors"] = errors
         extra["exceptions"] = exceptions

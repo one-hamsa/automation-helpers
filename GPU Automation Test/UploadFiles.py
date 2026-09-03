@@ -54,6 +54,37 @@ def run_log_parser(test_dir):
     except Exception as e:
         print(f"[PARSE] log_parser crashed: {e}")
 
+
+def _read_log_stats(test_dir):
+    """Sum error and exception counts from every *_log_findings.csv log_parser.py wrote
+    under the run folder - every one of them, so a run that pulled more than one session
+    log is counted in full. Returns (errors, exceptions), or (None, None) when no findings
+    CSV is present.
+    """
+    csv_paths = sorted(glob.glob(os.path.join(test_dir, "**", "*_log_findings.csv"), recursive=True))
+    if not csv_paths:
+        print("[LOGSTATS] No *_log_findings.csv found, skipping error/exception counts.")
+        return None, None
+    errors = exceptions = 0
+    for csv_path in csv_paths:
+        try:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    try:
+                        n = int(row.get("count") or 0)
+                    except ValueError:
+                        n = 0
+                    if row.get("kind") == "error":
+                        errors += n
+                    elif row.get("kind") == "exception":
+                        exceptions += n
+        except Exception as e:
+            print(f"[LOGSTATS] Failed to read {csv_path}: {e}")
+            return None, None
+    print(f"[LOGSTATS] errors={errors}, exceptions={exceptions} "
+          f"(from {len(csv_paths)} findings CSV(s))")
+    return errors, exceptions
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -523,16 +554,19 @@ def _parse_folder_name(folder_name):
     return test_name, scene_name, timestamp
 
 
-def _write_ci_outputs(gpu_stats, folder_name):
-    """Append one tab-separated row per level - label, average, median, difference - to
-    GPU_METRICS_FILE. A file rather than a step output because a sweep runs this script
-    once per level, and a step output would keep only the last level's number. Empty
-    values = no metric produced. No-op outside CI, and never fails the run.
+def _write_ci_outputs(gpu_stats, folder_name, errors=None, exceptions=None):
+    """Append one tab-separated row per level - label, average, median, difference,
+    errors, exceptions - to GPU_METRICS_FILE. A file rather than a step output because a
+    sweep runs this script once per level, and a step output would keep only the last
+    level's number. Empty values = no metric produced. No-op outside CI, and never fails
+    the run.
     """
     if gpu_stats is None:
         values = ["", "", ""]
     else:
         values = [f"{gpu_stats[k]:.0f}" for k in ("average", "median", "diff")]
+    values += ["" if errors is None else str(errors),
+               "" if exceptions is None else str(exceptions)]
 
     metrics_path = os.environ.get("GPU_METRICS_FILE")
     if metrics_path:
@@ -670,8 +704,10 @@ def main():
         print(f"ERROR: Directory not found: {test_dir}")
         sys.exit(1)
 
-    # Parse the pulled game logs first so the findings CSV is present for the upload step.
+    # Parse the pulled game logs first so the findings CSV is present for the upload step
+    # and for the error/exception totals below.
     run_log_parser(test_dir)
+    errors, exceptions = _read_log_stats(test_dir)
 
     do_graph = not args.upload_only
     do_upload = not args.graph_only
@@ -687,7 +723,7 @@ def main():
             print("[GRAPH] Success.")
         else:
             print("[GRAPH] Failed.")
-        _write_ci_outputs(gpu_stats, folderName)
+        _write_ci_outputs(gpu_stats, folderName, errors, exceptions)
 
         # Quest screencap captures both eyes side-by-side and each eye is
         # tilted, so crop to left eye, rotate to straighten, then trim
@@ -748,11 +784,15 @@ def main():
     #  - github_run_id: the ONLY link back to the workflow run that produced this
     #    folder. 15OS's Builds console resolves a run's RenderDoc capture through it
     #    (same as the bots test's profiler db), and a sweep's folders all share it.
+    #  - errors/exceptions: totals from the log parser's findings CSVs.
     # Empty when the test was run by hand rather than from the workflow.
     extra = {}
     github_run_id = os.environ.get("GITHUB_RUN_ID")
     if github_run_id:
         extra["github_run_id"] = github_run_id
+    if errors is not None:
+        extra["errors"] = errors
+        extra["exceptions"] = exceptions
     if args.commit_sha:
         extra["commit_sha"] = args.commit_sha
     if args.commit_ref:
