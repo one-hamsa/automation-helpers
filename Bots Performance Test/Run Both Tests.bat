@@ -56,6 +56,13 @@ set "UPLOAD_LOG=%SYNC_DIR%\upload_output.log"
 
 :: Clean up and create the sync directory. Before the first :say, because the runner logs
 :: and the master log both depend on it existing.
+:: The ADB daemon first: the one the Quest runner forks inherits that runner's stdout -
+:: quest_output.log, in here - and holds the handle for its whole lifetime, so a daemon
+:: left over from a previous run makes both the delete below and the redirect that starts
+:: the Quest runner fail. That failure is silent, and the run then hangs on :WAIT_BOTH
+:: waiting for a QUEST_DONE that never comes. Killing it here makes this run independent
+:: of how the last one ended, including a manual run that was never closed down.
+adb kill-server >nul 2>&1
 if exist "%SYNC_DIR%" rd /s /q "%SYNC_DIR%"
 mkdir "%SYNC_DIR%"
 
@@ -174,7 +181,9 @@ call :append_section "UPLOAD LOG" "!UPLOAD_LOG!"
 :: upload must still leave the headset and the PC bots to be closed down cleanly.
 if not "!UPLOAD_EXIT!"=="0" call :say WARNING: UploadFiles.py exited with !UPLOAD_EXIT!
 
-:: Clean up sync directory
+:: Clean up sync directory. The ADB daemon first - it holds quest_output.log open, so the
+:: delete fails while it is alive. Nothing past this point uses adb.
+adb kill-server >nul 2>&1
 rd /s /q "%SYNC_DIR%" >nul 2>&1
 
 call :say ========================================================

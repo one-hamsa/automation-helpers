@@ -60,6 +60,10 @@ if errorlevel 1 (
 )
 
 :: --- 3. Clear the sync dir so a half-finished run can't confuse the next one ---
+:: The ADB daemon goes first - it holds quest_output.log in there open, so the delete
+:: fails while it is alive and the next run cannot start its Quest half at all. Placed
+:: below the headset commands above, which need a live daemon.
+adb kill-server >nul 2>&1
 if exist "%SYNC_DIR%" rd /s /q "%SYNC_DIR%" >nul 2>&1
 
 if "!HEADSET_OK!"=="0" (
