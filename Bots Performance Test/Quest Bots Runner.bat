@@ -325,6 +325,9 @@ if "%LATEST_FILE%"=="" (
     echo    Found: %LATEST_FILE%
 adb pull "%REMOTE_PATH%/%LATEST_FILE%" "%CURRENT_TEST_DIR%\CSV_REPORT.csv")
 
+:: Clear the captured metrics folder so the next run only sees its own CSV
+adb shell "rm -rf %REMOTE_PATH%/*"
+
 :: Download the screenshots from the headset, then delete them
 echo    Downloading screenshots...
 adb wait-for-device
