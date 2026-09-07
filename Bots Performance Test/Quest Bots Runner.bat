@@ -1,9 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-:: making the adb use the one the profiler project uses so they won't fight over the adb server
-set "PATH=C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Data\PlaybackEngines\AndroidPlayer\SDK\platform-tools;%PATH%"
-
 :: --- CONFIGURATION START ---
 :: "Run Both Tests.bat" owns both of these and passes them down, because it is the one that
 :: reports and uploads at the end of the run. These values are the standalone fallback.

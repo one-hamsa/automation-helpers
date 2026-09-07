@@ -1,12 +1,16 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-:: Force the project's Unity adb (2022.3.31f1) to the front of PATH so we don't pick up a different
-:: Unity install's adb (e.g. 6000.x) and end up fighting over the adb server. ANDROID_SDK_ROOT/HOME
-:: point renderdoccmd at the SAME SDK (belt-and-suspenders alongside renderdoc.conf's SDKDirPath).
-set "ANDROID_SDK_ROOT=C:\Program Files\Unity\Hub\Editor\2022.3.31f1\Editor\Data\PlaybackEngines\AndroidPlayer\SDK"
+:: adb comes from PATH (Unity Hub's AndroidPlayer SDK). Derive the SDK root from it so
+:: renderdoccmd targets the SAME SDK - its renderdoc.conf SDKDirPath can be stale.
+for /f "delims=" %%A in ('where adb 2^>nul') do (
+    if not defined ANDROID_SDK_ROOT for %%B in ("%%~dpA..") do set "ANDROID_SDK_ROOT=%%~fB"
+)
+if not defined ANDROID_SDK_ROOT (
+    echo ERROR: adb not found on PATH. Add Unity's AndroidPlayer\SDK\platform-tools to PATH.
+    exit /b 1
+)
 set "ANDROID_HOME=%ANDROID_SDK_ROOT%"
-set "PATH=%ANDROID_SDK_ROOT%\platform-tools;%PATH%"
 
 :: --- CONFIGURATION START ---
 set "ROOT_DIR=E:\Automation\UNDERDOGS Scene Test Automation\Tests Data"
