@@ -177,6 +177,10 @@ echo ...
 :: A word left over from a previous run would be acted on seconds after this launch.
 adb shell "rm -f %AUTOMATION_CONTROL%"
 
+:: Safety net for the log pull: the reinstall before this run already empties the folder, but a run
+:: on an already-installed build would otherwise pull leftover sessions alongside this one's.
+adb shell "rm -rf /sdcard/Android/data/com.onehamsa.underdogs/files/Logs/*"
+
 adb wait-for-device
 adb shell am start -n com.onehamsa.underdogs/com.unity3d.player.UnityPlayerActivity
 
