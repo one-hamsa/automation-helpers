@@ -32,9 +32,9 @@ import requests
 # UploadFiles.py lives in <repo>/GPU Automation Test/, the parser in <repo>/Analysis/.
 LOG_PARSER = Path(__file__).resolve().parent.parent / "Analysis" / "log_parser.py"
 
-# Game-log folder the .bat pulls off the headset, once, after both app launches: it holds the
-# metrics session as a .udlog (it reported before quitting, and the RenderDoc relaunch zipped
-# it) plus the RenderDoc session's own log dir. Uploaded to Drive and GitHub Pages.
+# Game-log folder the .bat pulls off the headset, after the metrics session quits and before the
+# RenderDoc relaunch: it holds that session as a .udlog, which the session itself wrote on quit.
+# The RenderDoc session's own log is not collected. Uploaded to Drive and GitHub Pages.
 REPORT_LOGS_DIRS = ("Report Logs",)
 
 # The runner's own logs for this level, zipped out of GPU_TEST_LOG_DIR. Drive only -

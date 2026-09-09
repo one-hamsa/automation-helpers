@@ -154,6 +154,11 @@ echo ...
 :: A word left over from a previous run would be acted on seconds after this launch.
 adb shell "rm -f %AUTOMATION_CONTROL%"
 
+:: Clear the game's log folder so the pull in step 6 only sees this run's sessions - same reason
+:: the CaptureMetrics folder is cleared. UploadFiles.py sums the error / exception counts of EVERY
+:: session log it finds, so a leftover .udlog would charge a previous run's errors to this one.
+adb shell "rm -rf /sdcard/Android/data/com.onehamsa.underdogs/files/Logs/*"
+
 adb wait-for-device
 adb shell am start -n com.onehamsa.underdogs/com.unity3d.player.UnityPlayerActivity
 
@@ -199,24 +204,28 @@ echo ...
 echo [6/9] Stopping OVR metrics and game, then pulling CSV / screenshots / logs...
 echo ...
 
-:: Phase 1 is done: stop the metrics tool (ends CSV recording), then end the game session.
+:: Phase 1 is done. The game is ended FIRST, while it is still alive: force-stopping OVR Metrics
+:: Tool takes the game down with it - ActivityManager kills the bound app ("Killing <pid>:
+:: com.onehamsa.underdogs (adj 0): stop com.oculus.ovrmonitormetricsservice") - so a control word
+:: written after that reaches a process that is already gone. CSV recording is ended once the game
+:: is out. This costs ~30s of extra in-scene samples in the CSV (the report + quit window).
 adb wait-for-device
-adb shell am force-stop com.oculus.ovrmonitormetricsservice
-ping 127.0.0.1 -n 3 >nul
+set "GAME_PID="
+for /f "delims=" %%p in ('adb shell pidof com.onehamsa.underdogs 2^>nul') do set "GAME_PID=%%p"
+if not defined GAME_PID echo    WARNING: the game is not running - it cannot report and will leave no .udlog.
 
 :: This session is the one whose log we want, so it reports before it goes: ZLogger's writer
 :: sleeps per entry in builds, and a force-stop takes whatever is still queued with it. The
-:: report drains the backlog to disk and uploads to the cloud; the RenderDoc relaunch below
-:: then turns that complete session into a .udlog, which is what the pull at the end collects.
-:: The RenderDoc session does NOT report - it exists to produce the capture, not a log.
+:: report drains the backlog to disk and uploads to the cloud.
 echo    asking the game to report (flushes the log backlog to disk)...
 adb shell "echo report > %AUTOMATION_CONTROL%"
 adb shell "chmod 666 %AUTOMATION_CONTROL%"
 ping 127.0.0.1 -n 16 >nul
 
-:: Quit through the game rather than force-stopping it: the report is still zipping and
-:: uploading, and the game holds its own quit until that drains (up to 15s). Force-stop is the
-:: fallback if it hangs.
+:: Quit through the game rather than force-stopping it: the report is still zipping and uploading,
+:: and the game holds its own quit until that drains (up to 15s). The quit is also what turns this
+:: session's live log folder into <session>.udlog and deletes the folder, which is what makes the
+:: pull below work. Force-stop is the fallback if it hangs - and it costs us the .udlog.
 echo    asking the game to quit...
 adb shell "echo quit > %AUTOMATION_CONTROL%"
 adb shell "chmod 666 %AUTOMATION_CONTROL%"
@@ -234,10 +243,16 @@ for /l %%i in (1,1,15) do (
 if defined GAME_CLOSED (
     echo    game exited on its own.
 ) else (
-    echo    WARNING: game still running after 30s - force-stopping, the report upload may be lost.
+    echo    WARNING: game still running after 30s - force-stopping. The report upload and this
+    echo             session's .udlog are lost.
     adb shell am force-stop com.onehamsa.underdogs
 )
 ping 127.0.0.1 -n 6 >nul
+
+:: The game is out - now stop the metrics tool, which ends CSV recording.
+adb wait-for-device
+adb shell am force-stop com.oculus.ovrmonitormetricsservice
+ping 127.0.0.1 -n 3 >nul
 
 :: --- CSV report ---
 adb wait-for-device
@@ -264,7 +279,22 @@ adb shell rm /sdcard/AUTOMATION_SCREENSHOT_3.png
 
 ping 127.0.0.1 -n 4 >nul
 
-:: Logs are pulled once, after the RenderDoc phase - see step 7.
+:: --- Game logs ---
+:: Pulled HERE, before the RenderDoc relaunch: the session that just quit zipped its own log
+:: folder into <session>.udlog and deleted the folder, so "Logs" holds flat files only. adb pull
+:: cannot copy a nested remote folder into a non-existent local one - it creates the subfolder and
+:: then fails with "Not a directory" - so any live session folder in there aborts the pull, which
+:: is exactly what the RenderDoc session leaves behind.
+:: Pull into a NON-existent "Report Logs" so adb renames it to the destination. Pre-creating the
+:: dir or appending "/." makes newer/RenderDoc-forked adb pull nothing. The /sdcard path is the
+:: accessible one; the /data/user fallback needs root.
+echo    Pulling game logs from headset...
+adb wait-for-device
+adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
+if errorlevel 1 (
+    echo Trying alternative path...
+    adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
+)
 
 :: ************************************************   7. RENDERDOC CAPTURE (phase 2 - separate launch)   ************************************************
 echo ...
@@ -322,19 +352,9 @@ adb wait-for-device
 adb shell am force-stop com.onehamsa.underdogs
 ping 127.0.0.1 -n 6 >nul
 
-:: One pull for both sessions, here at the end: the metrics session reported before it quit, so this
-:: relaunch zipped it into <session>.udlog, and the RenderDoc session's own log dir sits beside it -
-:: which is what tells us whether the capture landed in-scene or on "Connecting".
-:: Pull into a NON-existent "Report Logs" so adb renames it to the destination (contents land directly
-:: in "Report Logs\<session>"). Pre-creating the dir or appending "/." makes newer/RenderDoc-forked adb
-:: pull nothing. The /sdcard path is the accessible one; the /data/user fallback needs root.
-echo    Pulling game logs from headset...
-adb wait-for-device
-adb pull /sdcard/Android/data/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
-if errorlevel 1 (
-    echo Trying alternative path...
-    adb pull /data/user/0/com.onehamsa.underdogs/files/Logs "%CURRENT_TEST_DIR%\Report Logs"
-)
+:: The RenderDoc session's own log folder stays on the headset: it is force-stopped, so it never
+:: zips itself, and pulling a live session folder aborts the whole pull. The logs are collected in
+:: step 6, before this relaunch.
 
 :: ************************************************   8. GENERATE GRAPH AND UPLOAD FILES   ************************************************
 echo ...
