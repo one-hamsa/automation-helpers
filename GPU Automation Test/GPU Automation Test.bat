@@ -319,7 +319,8 @@ echo Device serial: %SERIAL%
 adb shell "rm -f %AUTOMATION_CONTROL%"
 
 set "RD_LAUNCH_LOG=%CURRENT_TEST_DIR%\renderdoc_launch.json"
-"%RENDERDOC_CMD%" adb-launch --device %SERIAL% --package com.onehamsa.underdogs --skip-controller-check > "%RD_LAUNCH_LOG%" 2>&1
+:: --pair-controllers pairs virtual controllers, which the headless rig has none of.
+"%RENDERDOC_CMD%" adb-launch --device %SERIAL% --package com.onehamsa.underdogs --pair-controllers > "%RD_LAUNCH_LOG%" 2>&1
 type "%RD_LAUNCH_LOG%"
 
 :: Extract the ident (the "ident": <number> field) from the JSON, robust to log noise and field order.
