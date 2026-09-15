@@ -136,8 +136,8 @@ adb shell setprop debug.oculus.cpuLevel -1
 adb shell setprop debug.oculus.gpuLevel 5
 
 :: hand foveation back to the OS
-adb shell setprop debug.oculus.foveation.dynamic 1
-adb shell setprop debug.oculus.foveation.level -1
+adb shell setprop debug.oculus.foveation.dynamic ''
+adb shell setprop debug.oculus.foveation.level ''
 
 :: Give the OS a few seconds to apply the change
 ping 127.0.0.1 -n 4 >nul

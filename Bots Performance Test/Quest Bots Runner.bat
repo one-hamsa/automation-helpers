@@ -166,8 +166,8 @@ adb shell setprop debug.oculus.cpuLevel 4
 adb shell setprop debug.oculus.gpuLevel 5
 
 :: Turn off dynamic foveation and lock the foveation level
-adb shell setprop debug.oculus.foveation.dynamic 1
-adb shell setprop debug.oculus.foveation.level -1
+adb shell setprop debug.oculus.foveation.dynamic ''
+adb shell setprop debug.oculus.foveation.level ''
 
 :: ************************************************   3. LAUNCHING GAME   ************************************************
 echo ...
