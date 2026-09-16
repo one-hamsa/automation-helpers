@@ -132,7 +132,7 @@ echo ...
 
 adb wait-for-device
 :: release the cpu, lock gpu to 5
-adb shell setprop debug.oculus.cpuLevel -1
+adb shell setprop debug.oculus.cpuLevel ''
 adb shell setprop debug.oculus.gpuLevel 5
 
 :: hand foveation back to the OS
@@ -371,11 +371,11 @@ echo [9/9] Putting the headset in sleep mode and enabling proximity censor again
 echo ...
 
 :: reset performance locks to default
-adb shell setprop debug.oculus.cpuLevel -1
-adb shell setprop debug.oculus.gpuLevel -1
+adb shell setprop debug.oculus.cpuLevel ''
+adb shell setprop debug.oculus.gpuLevel ''
 
-adb shell setprop debug.oculus.foveation.dynamic 1
-adb shell setprop debug.oculus.foveation.level -1
+adb shell setprop debug.oculus.foveation.dynamic ''
+adb shell setprop debug.oculus.foveation.level ''
 
 adb shell setprop debug.vr.gpuprofilingservice 0
 

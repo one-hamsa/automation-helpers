@@ -426,11 +426,11 @@ echo putting the headset in sleep mode and enabling proximity censor again
 echo ...
 
 :: reset performance locks to default
-adb shell setprop debug.oculus.cpuLevel -1
-adb shell setprop debug.oculus.gpuLevel -1
+adb shell setprop debug.oculus.cpuLevel ''
+adb shell setprop debug.oculus.gpuLevel ''
 
-adb shell setprop debug.oculus.foveation.dynamic 1
-adb shell setprop debug.oculus.foveation.level -1
+adb shell setprop debug.oculus.foveation.dynamic ''
+adb shell setprop debug.oculus.foveation.level ''
 
 ::enable the guardian again, enable the proximity censor and put the headset in sleep mode:
 adb wait-for-device
