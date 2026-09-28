@@ -31,7 +31,7 @@ $InstanceCount = 5
 
 $DebugConfigs = @(
     "Advanced/System/Force Bot",
-    "Multiplayer/Levels/Pipage.asset",
+    "Multiplayer/Levels/Pipage",
     "Advanced/Multiplayer/Bots Private Key"
 ) -join "`n"
 
