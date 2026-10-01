@@ -19,10 +19,6 @@ set "BOTS_DATA_FILE=%PC_DATA_DIR%\Bots_Local_Data.txt"
 :: collects them into the test folder once both runners are done.
 if not defined PC_BOT_LOGS_DIR set "PC_BOT_LOGS_DIR=%TEMP%\underdogs_bot_logs"
 
-:: NirCmd mutes a single process's audio session. Needed because -noaudio does not silence
-:: the instances, and five unmuted bots make the rig audible to whoever is next to it.
-set "NIRCMD=%~dp0SoundDisableHelper\nircmd.exe"
-
 :: Seconds between instance launches. Widened from 5 to spread the startup load, which is
 :: the heaviest moment on the rig - otherwise every instance loads its scenes at once.
 :: "ping -n N" waits N-1 seconds.
@@ -85,8 +81,6 @@ del /q "%PC_AUTOMATION_CONTROL%" >nul 2>&1
 :: mistaken for this one's.
 if exist "!PC_BOT_LOGS_DIR!" rd /s /q "!PC_BOT_LOGS_DIR!"
 mkdir "!PC_BOT_LOGS_DIR!"
-
-if not exist "!NIRCMD!" echo WARNING: !NIRCMD! not found - the instances will play audio.
 
 :: Free slots at the start of the run are the budget for the whole run: a crashed instance
 :: holds its slot until the reset at the end, so the count only ever drops. LAUNCH_COUNT is
@@ -179,14 +173,11 @@ if !LAUNCH_COUNT! GTR !INSTANCE_COUNT! (
 set "BOT_PID_FILE=!PC_BOT_LOGS_DIR!\bot_%~1.pid"
 del /q "!BOT_PID_FILE!" >nul 2>&1
 set "PID_%~1="
-:: PowerShell rather than "start", because muting needs the PID of the process just
+:: PowerShell rather than "start", because monitoring needs the PID of the process just
 :: launched. Paths go through the environment - several of them contain spaces, and
 :: quoting them through cmd into -Command is what breaks first.
-:: Launch flags and mute timing are kept identical to the Bots Station's run-bots.ps1, which
-:: is the version known to run silently. The one thing that script has and this chain does
-:: not is elevation - it re-launches itself as Administrator, so its nircmd runs elevated -
-:: hence the RunAs here, the same way the firewall rule above is elevated.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$log = Join-Path $env:PC_BOT_LOGS_DIR $env:BOT_LOG_NAME; $q = [char]34; $p = Start-Process -FilePath (Join-Path $env:BUILD_DIR $env:EXE_NAME) -ArgumentList ('-batchmode -nographics -logFile ' + $q + $log + $q) -WorkingDirectory $env:BUILD_DIR -NoNewWindow -PassThru; Set-Content -LiteralPath $env:BOT_PID_FILE -Value $p.Id; Start-Sleep -Milliseconds 500; if (Test-Path $env:NIRCMD) { Start-Process -FilePath $env:NIRCMD -ArgumentList @('muteappvolume', ('/' + $p.Id), '1') -Verb RunAs -Wait }; Write-Host ('   PID ' + $p.Id + ' -> ' + $log)"
+:: Audio is muted by the game itself (RealBotSession), not from here.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$log = Join-Path $env:PC_BOT_LOGS_DIR $env:BOT_LOG_NAME; $q = [char]34; $p = Start-Process -FilePath (Join-Path $env:BUILD_DIR $env:EXE_NAME) -ArgumentList ('-batchmode -nographics -logFile ' + $q + $log + $q) -WorkingDirectory $env:BUILD_DIR -NoNewWindow -PassThru; Set-Content -LiteralPath $env:BOT_PID_FILE -Value $p.Id; Write-Host ('   PID ' + $p.Id + ' -> ' + $log)"
 if exist "!BOT_PID_FILE!" set /p PID_%~1=<"!BOT_PID_FILE!"
 if not defined PID_%~1 echo   WARNING: no PID captured for instance %~1 - it will not be monitored.
 goto :eof

@@ -99,8 +99,6 @@ Write-Host " === LAUNCHING BOTS === "
 Write-Host ""
 
 
-$nircmdPath = Join-Path $PSScriptRoot "SoundDisableHelper\nircmd.exe"
-
 if (Test-Path $exePath) {
     for ($i = 1; $i -le $InstanceCount; $i++) {
         Start-Sleep -Seconds 3
@@ -114,12 +112,6 @@ if (Test-Path $exePath) {
             -WorkingDirectory $BuildDir `
             -NoNewWindow `
             -PassThru
-
-        # Allow Windows a brief moment to register the audio session
-        Start-Sleep -Milliseconds 500
-
-        # Mute ONLY the PID created in this iteration
-        & $nircmdPath muteappvolume "/$($proc.Id)" 1
 
         Write-Host "Launched instance $i/$InstanceCount (PID: $($proc.Id))"
     }
