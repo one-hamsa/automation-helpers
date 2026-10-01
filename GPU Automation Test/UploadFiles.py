@@ -385,6 +385,21 @@ def _webp_bytes(png_path):
     return buf.getvalue()
 
 
+def _write_webp(png_path):
+    """Write the WebP next to the screenshot it came from, so a report can attach the
+    screenshots: three Quest PNGs are ~10 MB, the same three as WebP well under a megabyte.
+    Returns the path, or None.
+    """
+    webp_path = f"{os.path.splitext(png_path)[0]}.webp"
+    try:
+        with open(webp_path, "wb") as f:
+            f.write(_webp_bytes(png_path))
+    except Exception as e:
+        print(f"[SCREENSHOT] WARNING: Could not write {os.path.basename(webp_path)}: {e}")
+        return None
+    return webp_path
+
+
 def _zip_bytes(root_dir):
     """Zip a directory tree, preserving paths relative to root_dir."""
     buf = io.BytesIO()
@@ -770,6 +785,7 @@ def main():
                 fw, fh = final.size
                 print(f"[SCREENSHOT] {sc_name}: cropped, rotated -20°, trimmed ({w}x{h} -> {fw}x{fh})")
                 has_thumbnail = True
+                _write_webp(sc_path)
             except Exception as e:
                 print(f"[SCREENSHOT] WARNING: Could not process {sc_name}: {e}")
         if not has_thumbnail:
