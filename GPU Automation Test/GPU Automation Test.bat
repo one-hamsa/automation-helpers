@@ -364,6 +364,9 @@ echo ...
 
 python "%~dp0UploadFiles.py" "%CURRENT_TEST_DIR%" "%DRIVE_FOLDER_NAME%" --started-by "%STARTED_BY%" --commit-sha "%COMMIT_SHA%" --commit-ref "%COMMIT_REF%" --github-token "%AUTOMATION_REPOS_PAT%"
 
+:: Results live on Drive and the dashboard - the rig keeps no copy.
+rd /s /q "%CURRENT_TEST_DIR%" >nul 2>&1
+
 :: ************************************************    RESETTING EVERYTHING BACK AGAIN   ************************************************
 
 echo ...
@@ -388,6 +391,5 @@ adb shell input keyevent KEYCODE_SLEEP
 
 echo ========================================================
 echo                  TEST COMPLETE
-echo    Files saved locally in: %CURRENT_TEST_DIR%
 echo    Files saved in google drive in: %DRIVE_FOLDER_NAME%
 echo ========================================================

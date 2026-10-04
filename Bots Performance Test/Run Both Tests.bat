@@ -181,6 +181,16 @@ call :append_section "UPLOAD LOG" "!UPLOAD_LOG!"
 :: upload must still leave the headset and the PC bots to be closed down cleanly.
 if not "!UPLOAD_EXIT!"=="0" call :say WARNING: UploadFiles.py exited with !UPLOAD_EXIT!
 
+:: The workflow attaches the WebP screenshots to its Discord report, so they are handed to it
+:: before the test folder goes.
+if defined REPORT_SCREENSHOTS_DIR (
+    mkdir "!REPORT_SCREENSHOTS_DIR!" 2>nul
+    copy /y "!BOT_TEST_DIR!\SCREENSHOT_*.webp" "!REPORT_SCREENSHOTS_DIR!" >nul 2>&1
+)
+
+:: Results live on Drive and the dashboard - the rig keeps no copy.
+rd /s /q "!BOT_TEST_DIR!" >nul 2>&1
+
 :: Clean up sync directory. The ADB daemon first - it holds quest_output.log open, so the
 :: delete fails while it is alive. Nothing past this point uses adb.
 adb kill-server >nul 2>&1
@@ -188,7 +198,6 @@ rd /s /q "%SYNC_DIR%" >nul 2>&1
 
 call :say ========================================================
 call :say           BOTH TESTS COMPLETE
-call :say    Files saved locally in: !BOT_TEST_DIR!
 call :say    Files saved in google drive in: !DRIVE_FOLDER_NAME!
 call :say ========================================================
 exit /b 0
