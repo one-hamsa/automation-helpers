@@ -206,13 +206,13 @@ echo ...
 echo [5/10] Running game...
 echo ...
 
-:: take a screenshot, Wait 30 sec, take a screenshot again, wait 30 sec, and take a screenshot at the end.
+:: take a screenshot, wait 10 sec for the match to start, capture 2 min, wait 5 sec, and take a screenshot at the end.
 
 echo    Taking screenshot 1 from headset...
 adb wait-for-device
 adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_1.png
 
-ping 127.0.0.1 -n 31 >nul
+ping 127.0.0.1 -n 11 >nul
 
 echo preparing the CPU performance capture
 adb wait-for-device
@@ -224,22 +224,28 @@ adb shell input keyevent KEYCODE_WAKEUP
 
 set "IL2CPPLAB_ROOT=/sdcard/Android/data/com.onehamsa.underdogs/files/il2cpplab"
 
-echo starting the 30 second il2cpplab CPU capture
+echo starting the 2 minute il2cpplab CPU capture
 adb wait-for-device
 
 adb shell "mkdir -p %IL2CPPLAB_ROOT% && chmod 2777 %IL2CPPLAB_ROOT%"
-adb shell "echo cap 200 > %IL2CPPLAB_ROOT%/profilerControl.txt"
+:: per-session disk cap for the capture files: over it the recorder deletes the oldest files
+:: (the start of the capture). A 30s capture measured ~50-75MB compressed / ~225MB raw.
+adb shell "echo cap 1024 > %IL2CPPLAB_ROOT%/profilerControl.txt"
 adb shell "echo start >> %IL2CPPLAB_ROOT%/profilerControl.txt"
 adb shell "chmod 666 %IL2CPPLAB_ROOT%/profilerControl.txt"
 
-ping 127.0.0.1 -n 31 >nul
+ping 127.0.0.1 -n 121 >nul
 
 echo stopping the il2cpplab capture
 adb wait-for-device
 adb shell "echo stop > %IL2CPPLAB_ROOT%/profilerControl.txt"
 adb shell "chmod 666 %IL2CPPLAB_ROOT%/profilerControl.txt"
 :: let the writer flush and close the session files before the game is force-stopped
-ping 127.0.0.1 -n 4 >nul
+ping 127.0.0.1 -n 6 >nul
+
+echo    Taking screenshot 2 from headset...
+adb wait-for-device
+adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_2.png
 
 :: Ask the game for an in-game report. ZLogger's writer sleeps per entry (~10 entries/s in
 :: builds), so the capture window's log entries are still queued at this point and a
@@ -253,18 +259,6 @@ ping 127.0.0.1 -n 16 >nul
 :: shows up in the log when the capture root is wrong (internal storage) or the build isn't a tracking build
 echo il2cpplab sessions on the device:
 adb shell "ls -l %IL2CPPLAB_ROOT%"
-
-echo    Taking screenshot 2 from headset...
-adb wait-for-device
-adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_2.png
-
-ping 127.0.0.1 -n 21 >nul
-
-echo    Taking screenshot 3 from headset...
-adb wait-for-device
-adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_3.png
-
-ping 127.0.0.1 -n 6 >nul
 
 :: ************************************************   6. STOPPING GAME   ************************************************
 echo ...
@@ -336,8 +330,6 @@ adb pull /sdcard/AUTOMATION_SCREENSHOT_1.png "%CURRENT_TEST_DIR%\SCREENSHOT_1.pn
 adb shell rm /sdcard/AUTOMATION_SCREENSHOT_1.png
 adb pull /sdcard/AUTOMATION_SCREENSHOT_2.png "%CURRENT_TEST_DIR%\SCREENSHOT_2.png"
 adb shell rm /sdcard/AUTOMATION_SCREENSHOT_2.png
-adb pull /sdcard/AUTOMATION_SCREENSHOT_3.png "%CURRENT_TEST_DIR%\SCREENSHOT_3.png"
-adb shell rm /sdcard/AUTOMATION_SCREENSHOT_3.png
 
 ping 127.0.0.1 -n 4 >nul
 

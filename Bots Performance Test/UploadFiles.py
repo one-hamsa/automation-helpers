@@ -972,7 +972,7 @@ def main():
         # the black borders created by the rotation.
         from PIL import Image
         import math
-        for sc_name in ["SCREENSHOT_1.png", "SCREENSHOT_2.png", "SCREENSHOT_3.png"]:
+        for sc_name in ["SCREENSHOT_1.png", "SCREENSHOT_2.png"]:
             sc_path = os.path.join(test_dir, sc_name)
             if not os.path.exists(sc_path) or os.path.getsize(sc_path) == 0:
                 print(f"[SCREENSHOT] {sc_name} not found, skipping.")
@@ -1016,7 +1016,7 @@ def main():
             except Exception as e:
                 print(f"[SCREENSHOT] WARNING: Could not process {sc_name}: {e}")
         if not has_thumbnail:
-            print("[SCREENSHOT] No screenshots found (SCREENSHOT_1/2/3.png missing).")
+            print("[SCREENSHOT] No screenshots found (SCREENSHOT_1/2.png missing).")
 
     profiler_raw_path = None
 
