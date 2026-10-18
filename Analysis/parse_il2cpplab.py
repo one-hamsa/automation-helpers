@@ -44,6 +44,16 @@ VIDEO_FILE_NAME = "video.mp4"
 # The platform symbol artifact il2cpplab resolves return addresses against, by the name
 # the build sidecar gives it. Android first: these runs are Quest captures.
 SYMBOL_ARTIFACTS = ("libil2cpp.so", "GameAssembly.pdb")
+# Frames left out at the start of every capture: starting the recorder costs ~20 frames
+# of 30-70 ms before frame times settle, which would otherwise skew every average.
+SKIP_FRAMES = 30
+
+
+def supports_skip_frames(entry):
+    """The tool comes from the build under test; builds older than the option lack it."""
+    result = subprocess.run([sys.executable, str(entry), "parse", "--help"],
+                            capture_output=True, text=True)
+    return "--skip-frames" in result.stdout
 
 
 def find_inputs(capture_dir):
@@ -111,6 +121,11 @@ def main():
            "--sites", str(sites), "--out", str(db_path)]
     if artifact is not None:
         cmd += ["--symbols", str(artifact)]
+    if supports_skip_frames(entry):
+        cmd += ["--skip-frames", str(SKIP_FRAMES)]
+    else:
+        print(f"[IL2CPPLAB] this build's il2cpplab has no --skip-frames - "
+              "the capture's start-up frames stay in.")
 
     print(f"[IL2CPPLAB] Parsing capture -> {db_path.name} (several minutes)...")
     result = subprocess.run(cmd)
