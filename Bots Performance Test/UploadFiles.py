@@ -148,8 +148,8 @@ REQUIRED_DRIVE_VARS = ("GOOGLE_DRIVE_CLIENT_ID", "GOOGLE_DRIVE_CLIENT_SECRET", "
 # PAT is supplied only via the --github-token CLI arg (the .bat passes it,
 # sourced from the UPLOAD_TO_AUTOMATION_REPOS_PAT workflow secret); set in main().
 GITHUB_TOKEN = ""
-GITHUB_REPO_OWNER = "TheTripleL123"
-GITHUB_REPO_NAME = "Bots-Automation-Tests"
+GITHUB_REPO_OWNER = "one-hamsa"
+GITHUB_REPO_NAME = "Bots-Performance-Tests"
 GITHUB_BRANCH = "main"
 
 GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents"
