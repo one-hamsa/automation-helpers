@@ -1,7 +1,7 @@
 r"""
 Post-test processing for UNDERDOGS automation.
-Generates an App fps Time graph from the CSV report and uploads
-all test files (CSV, mp4, graph PNG) to Google Drive AND GitHub Pages.
+Computes FPS / App T stats from the CSV report and uploads
+all test files (CSV, mp4, screenshots) to Google Drive AND GitHub Pages.
 
 Uses OAuth2 with a saved token. First run requires a browser login
 on the runner machine; after that the token auto-refreshes and
@@ -172,7 +172,7 @@ def metric_stats(values, lower_is_better):
 
 
 # ---------------------------------------------------------------------------
-# Graph generation
+# Metrics
 # ---------------------------------------------------------------------------
 def read_metric_series(test_dir, column):
     """Read one OVR metrics column from the run's CSV.
@@ -231,47 +231,15 @@ def compute_app_time_stats(test_dir):
     return stats
 
 
-def generate_graph(test_dir, folderName):
-    """Read the CSV and produce a fps Utilization line chart.
-    Returns (graph_path, fps_stats) or (None, None) on failure.
-    """
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    times_sec, fps_values = read_metric_series(test_dir, "average_frame_rate")
-    if not times_sec:
-        return None, None
-
-    print(f"  Plotting {len(times_sec)} data points (after 60s)...")
-
-    stats = metric_stats(fps_values, lower_is_better=False)
-    min_val = min(fps_values)
-    max_val = max(fps_values)
+def compute_fps_stats(test_dir):
+    """FPS average, median and their difference. None if unavailable."""
+    _, values = read_metric_series(test_dir, "average_frame_rate")
+    if not values:
+        return None
+    stats = metric_stats(values, lower_is_better=False)
     print(f"  FPS - average: {stats['average']:.1f}, median: {stats['median']:.1f}, "
-          f"difference: {stats['diff']:.1f} (over {len(fps_values)} samples after 60s)")
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(times_sec, fps_values, linewidth=1.2, color="#2563eb", label="FPS")
-    # The headline number gets the emphatic line - it is what the run is judged on.
-    ax.axhline(y=stats["average"], color="#16a34a", linestyle="--", linewidth=1.2, label=f"Average: {stats['average']:.1f}")
-    ax.axhline(y=stats["median"], color="#7c3aed", linestyle="--", linewidth=1.2, label=f"Median: {stats['median']:.1f}")
-    ax.axhline(y=min_val, color="#0891b2", linestyle=":",  linewidth=1.2, label=f"Min: {min_val:.0f}")
-    ax.axhline(y=max_val, color="#dc2626", linestyle=":",  linewidth=1.2, label=f"Max: {max_val:.0f}")
-
-    ax.set_xlabel("Time (seconds)")
-    ax.set_ylabel("FPS")
-    ax.set_title(f"{folderName}")
-    ax.legend(loc="upper right")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-
-    out_path = os.path.join(test_dir, "FPS_GRAPH.png")
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-
-    print(f"  Graph saved: {out_path}")
-    return out_path, stats
+          f"difference: {stats['diff']:.1f} (over {len(values)} samples after 60s)")
+    return stats
 
 
 # ---------------------------------------------------------------------------
@@ -918,10 +886,10 @@ def upload_to_github(test_dir, folderName, fps_stats, app_time_stats, drive_link
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Post-test graph & upload")
+    parser = argparse.ArgumentParser(description="Post-test metrics & upload")
     parser.add_argument("test_dir", help="Path to the test output directory")
     parser.add_argument("folderName", help="Test folderName string")
-    parser.add_argument("--graph-only", action="store_true", help="Only generate graph")
+    parser.add_argument("--graph-only", action="store_true", help="Only compute metrics and process screenshots, no upload")
     parser.add_argument("--upload-only", action="store_true", help="Only upload")
     parser.add_argument("--started-by", default="unknown", help="GitHub username who started the test")
     parser.add_argument("--num-pc-bots", default="",
@@ -956,14 +924,8 @@ def main():
     has_thumbnail = False
 
     if do_graph:
-        print("[GRAPH] Generating App fps Time graph...")
-        graph_path, fps_stats = generate_graph(test_dir, folderName)
-        if graph_path:
-            print("[GRAPH] Success.")
-        else:
-            print("[GRAPH] Failed.")
-
-        print("[METRICS] Computing the App T average, median and difference...")
+        print("[METRICS] Computing the FPS and App T average, median and difference...")
+        fps_stats = compute_fps_stats(test_dir)
         app_time_stats = compute_app_time_stats(test_dir)
         _write_ci_outputs(fps_stats, app_time_stats)
 

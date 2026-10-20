@@ -1,7 +1,7 @@
 r"""
 Post-test processing for UNDERDOGS automation.
-Generates an App GPU Time graph from the CSV report and uploads
-all test files (CSV, mp4, graph PNG) to Google Drive AND GitHub Pages.
+Computes App GPU Time stats from the CSV report and uploads
+all test files (CSV, mp4, screenshots) to Google Drive AND GitHub Pages.
 
 Uses OAuth2 with a saved token. First run requires a browser login
 on the runner machine; after that the token auto-refreshes and
@@ -116,7 +116,7 @@ GITHUB_HEADERS = {
 
 
 # ---------------------------------------------------------------------------
-# Graph generation
+# Metrics
 # ---------------------------------------------------------------------------
 def metric_stats(values, lower_is_better):
     """Average, median, and the difference between them - average minus median.
@@ -130,19 +130,14 @@ def metric_stats(values, lower_is_better):
     }
 
 
-def generate_graph(test_dir, folderName):
-    """Read the CSV and produce an App GPU Time line chart.
-    Returns (graph_path, gpu_stats) or (None, None) on failure.
-    """
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+def compute_gpu_stats(test_dir):
+    """App GPU Time (microseconds) average, median and their difference.
+    None if unavailable."""
     csv_pattern = os.path.join(test_dir, "CSV_REPORT*.csv")
     csv_files = glob.glob(csv_pattern)
     if not csv_files:
         print(f"  ERROR: No CSV file found matching {csv_pattern}")
-        return None, None
+        return None
 
     csv_path = csv_files[0]
     print(f"  Reading CSV: {csv_path}")
@@ -163,7 +158,7 @@ def generate_graph(test_dir, folderName):
 
     if not times_sec:
         print("  ERROR: No valid data rows found in CSV.")
-        return None, None
+        return None
 
     print(f"  CSV has {len(times_sec)} rows, time range: {times_sec[0]:.1f}s - {times_sec[-1]:.1f}s")
 
@@ -171,40 +166,14 @@ def generate_graph(test_dir, folderName):
     if not filtered:
         print(f"  ERROR: No data points after 60 seconds (max timestamp: {times_sec[-1]:.1f}s).")
         print("  Hint: OVR metrics capture was too short — check device connection and game load time.")
-        return None, None
-    times_sec, gpu_times_ms = zip(*filtered)
-    times_sec = list(times_sec)
-    gpu_times_ms = list(gpu_times_ms)
-
-    print(f"  Plotting {len(times_sec)} data points (after 60s)...")
+        return None
+    gpu_times_ms = [g for _, g in filtered]
 
     stats = metric_stats(gpu_times_ms, lower_is_better=True)
-    min_val = min(gpu_times_ms)
-    max_val = max(gpu_times_ms)
     print(f"  App T - average: {stats['average']:.0f} us, median: {stats['median']:.0f} us, "
           f"difference: {stats['diff']:.0f} us (over {len(gpu_times_ms)} samples after 60s)")
 
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(times_sec, gpu_times_ms, linewidth=1.2, color="#2563eb", label="App GPU Time")
-    # The headline number gets the emphatic line - it is what the run is judged on.
-    ax.axhline(y=stats["average"], color="#16a34a", linestyle="--", linewidth=1.2, label=f"Average: {stats['average']:.0f}")
-    ax.axhline(y=stats["median"], color="#7c3aed", linestyle="--", linewidth=1.2, label=f"Median: {stats['median']:.0f}")
-    ax.axhline(y=min_val, color="#0891b2", linestyle=":",  linewidth=1.2, label=f"Min: {min_val:.0f}")
-    ax.axhline(y=max_val, color="#dc2626", linestyle=":",  linewidth=1.2, label=f"Max: {max_val:.0f}")
-
-    ax.set_xlabel("Time (seconds)")
-    ax.set_ylabel("App GPU Time")
-    ax.set_title(f"{folderName}")
-    ax.legend(loc="upper right")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-
-    out_path = os.path.join(test_dir, "APP_TIME_GRAPH.png")
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-
-    print(f"  Graph saved: {out_path}")
-    return out_path, stats
+    return stats
 
 
 # ---------------------------------------------------------------------------
@@ -692,10 +661,10 @@ def upload_to_github(test_dir, folderName, gpu_stats, drive_link=None, has_thumb
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Post-test graph & upload")
+    parser = argparse.ArgumentParser(description="Post-test metrics & upload")
     parser.add_argument("test_dir", help="Path to the test output directory")
     parser.add_argument("folderName", help="Test folderName string")
-    parser.add_argument("--graph-only", action="store_true", help="Only generate graph")
+    parser.add_argument("--graph-only", action="store_true", help="Only compute metrics and process screenshots, no upload")
     parser.add_argument("--upload-only", action="store_true", help="Only upload")
     parser.add_argument("--started-by", default="unknown", help="GitHub username who started the test")
     parser.add_argument("--commit-sha", default="", help="Git commit SHA the build was made from")
@@ -732,12 +701,8 @@ def main():
     has_thumbnail = False
 
     if do_graph:
-        print("[GRAPH] Generating App GPU Time graph...")
-        graph_path, gpu_stats = generate_graph(test_dir, folderName)
-        if graph_path:
-            print("[GRAPH] Success.")
-        else:
-            print("[GRAPH] Failed.")
+        print("[METRICS] Computing the App T average, median and difference...")
+        gpu_stats = compute_gpu_stats(test_dir)
         _write_ci_outputs(gpu_stats, folderName, errors, exceptions)
 
         # Quest screencap captures both eyes side-by-side and each eye is

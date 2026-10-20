@@ -408,7 +408,7 @@ if defined IL2CPPLAB_TOOL_DIR (
 )
 
 
-:: The graph, the functionality checks and the upload run from "Run Both Tests.bat" once
+:: The metrics, the functionality checks and the upload run from "Run Both Tests.bat" once
 :: both runners have finished, so that they see the Steam client's session log too.
 
 :: ************************************************    RESETTING EVERYTHING BACK AGAIN   ************************************************
