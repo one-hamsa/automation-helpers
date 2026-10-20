@@ -1,5 +1,5 @@
 
-# Run by the UnderdogsBotLoop scheduled task (registered by enable-bots.ps1). Needs no admin:
+# Run by the UnderdogsBotLoop scheduled task (registered by register-tasks.ps1). Needs no admin:
 # the firewall rule for the station's exe is created once by setup-station.ps1.
 
 $logDir = Join-Path $PSScriptRoot 'Logs'

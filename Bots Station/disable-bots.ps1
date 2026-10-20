@@ -1,5 +1,5 @@
 # Disables the UnderdogsBotLoop scheduled task and closes every bot this station launched.
-# enable-bots.ps1 turns it back on. Needs no admin.
+# Run daily at 22:00 by UnderdogsDisableBots; enable-bots.ps1 turns it back on. Needs no admin.
 
 $TaskName = "UnderdogsBotLoop"
 
