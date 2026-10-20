@@ -15,9 +15,9 @@ set "ANDROID_HOME=%ANDROID_SDK_ROOT%"
 :: --- CONFIGURATION START ---
 set "ROOT_DIR=E:\Automation\UNDERDOGS Scene Test Automation\Tests Data"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
-:: The game polls this file (AutomationControl) and acts on the word in it: "report" sends an
+:: The game polls this file (DebugBridge) and acts on the word in it: "report" sends an
 :: in-game report, "quit" quits the app.
-set "AUTOMATION_CONTROL=/sdcard/Android/data/com.onehamsa.underdogs/files/automationControl.txt"
+set "DEBUG_BRIDGE_FILE=/sdcard/Android/data/com.onehamsa.underdogs/files/debugBridge.txt"
 :: RenderDoc Meta fork (bundled with Quest Developer Hub). %APPDATA% avoids hardcoding the username.
 set "RENDERDOC_CMD=%APPDATA%\odh\packages\tools\renderdoc-oculus\renderdoccmd.exe"
 :: --- CONFIGURATION END ---
@@ -152,7 +152,7 @@ echo ...
 :: RenderDoc capture happens in a SEPARATE launch afterwards (phase 2, step 7).
 
 :: A word left over from a previous run would be acted on seconds after this launch.
-adb shell "rm -f %AUTOMATION_CONTROL%"
+adb shell "rm -f %DEBUG_BRIDGE_FILE%"
 
 :: Clear the game's log folder so the pull in step 6 only sees this run's sessions - same reason
 :: the CaptureMetrics folder is cleared. UploadFiles.py sums the error / exception counts of EVERY
@@ -218,8 +218,8 @@ if not defined GAME_PID echo    WARNING: the game is not running - it cannot rep
 :: sleeps per entry in builds, and a force-stop takes whatever is still queued with it. The
 :: report drains the backlog to disk and uploads to the cloud.
 echo    asking the game to report (flushes the log backlog to disk)...
-adb shell "echo report > %AUTOMATION_CONTROL%"
-adb shell "chmod 666 %AUTOMATION_CONTROL%"
+adb shell "echo report > %DEBUG_BRIDGE_FILE%"
+adb shell "chmod 666 %DEBUG_BRIDGE_FILE%"
 ping 127.0.0.1 -n 16 >nul
 
 :: Quit through the game rather than force-stopping it: the report is still zipping and uploading,
@@ -227,8 +227,8 @@ ping 127.0.0.1 -n 16 >nul
 :: session's live log folder into <session>.udlog and deletes the folder, which is what makes the
 :: pull below work. Force-stop is the fallback if it hangs - and it costs us the .udlog.
 echo    asking the game to quit...
-adb shell "echo quit > %AUTOMATION_CONTROL%"
-adb shell "chmod 666 %AUTOMATION_CONTROL%"
+adb shell "echo quit > %DEBUG_BRIDGE_FILE%"
+adb shell "chmod 666 %DEBUG_BRIDGE_FILE%"
 
 echo    waiting up to 30s for the game to close itself...
 set "GAME_CLOSED="
@@ -316,7 +316,7 @@ echo Device serial: %SERIAL%
 :: layer injected, and returns an "ident" used by the capture below.
 :: If phase 1 had to be force-stopped, its "quit" was never consumed - and this relaunch would
 :: act on it and exit before the capture. The RenderDoc session takes no commands.
-adb shell "rm -f %AUTOMATION_CONTROL%"
+adb shell "rm -f %DEBUG_BRIDGE_FILE%"
 
 set "RD_LAUNCH_LOG=%CURRENT_TEST_DIR%\renderdoc_launch.json"
 :: --pair-controllers pairs virtual controllers, which the headless rig has none of.

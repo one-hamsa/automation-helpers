@@ -7,10 +7,10 @@ setlocal EnableDelayedExpansion
 if not defined ROOT_DIR set "ROOT_DIR=E:\Automation\UNDERDOGS Bots Automation\Tests Data"
 if not defined LOG_FILES_DIR set "LOG_FILES_DIR=E:\Automation\UNDERDOGS Bots Automation\Log Files"
 set "REMOTE_PATH=/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics"
-:: The game polls this file (AutomationControl) and acts on the word in it: "report" sends an
+:: The game polls this file (DebugBridge) and acts on the word in it: "report" sends an
 :: in-game report, "quit" quits the app. Any development build reads it - unlike the il2cpplab
 :: profiler channel further down, which only exists in a tracking build.
-set "AUTOMATION_CONTROL=/sdcard/Android/data/com.onehamsa.underdogs/files/automationControl.txt"
+set "DEBUG_BRIDGE_FILE=/sdcard/Android/data/com.onehamsa.underdogs/files/debugBridge.txt"
 set "SYNC_DIR=%TEMP%\underdogs_bot_sync"
 :: --- CONFIGURATION END ---
 
@@ -175,7 +175,7 @@ echo [3/10] Launching Underdogs...
 echo ...
 
 :: A word left over from a previous run would be acted on seconds after this launch.
-adb shell "rm -f %AUTOMATION_CONTROL%"
+adb shell "rm -f %DEBUG_BRIDGE_FILE%"
 
 :: Safety net for the log pull: the reinstall before this run already empties the folder, but a run
 :: on an already-installed build would otherwise pull leftover sessions alongside this one's.
@@ -253,8 +253,8 @@ adb shell screencap -p /sdcard/AUTOMATION_SCREENSHOT_2.png
 :: "Logs" pull further down gets a complete session and the profiler can place entries on
 :: real frames - and the report itself reaches the cloud. Capped at 5s inside the game.
 echo    asking the game to report (flushes the log backlog to disk)...
-adb shell "echo report > %AUTOMATION_CONTROL%"
-adb shell "chmod 666 %AUTOMATION_CONTROL%"
+adb shell "echo report > %DEBUG_BRIDGE_FILE%"
+adb shell "chmod 666 %DEBUG_BRIDGE_FILE%"
 ping 127.0.0.1 -n 16 >nul
 :: shows up in the log when the capture root is wrong (internal storage) or the build isn't a tracking build
 echo il2cpplab sessions on the device:
@@ -271,8 +271,8 @@ echo ...
 :: a later launch - landing under the wrong run. Force-stop is the fallback if it hangs.
 adb wait-for-device
 echo    asking the game to quit...
-adb shell "echo quit > %AUTOMATION_CONTROL%"
-adb shell "chmod 666 %AUTOMATION_CONTROL%"
+adb shell "echo quit > %DEBUG_BRIDGE_FILE%"
+adb shell "chmod 666 %DEBUG_BRIDGE_FILE%"
 
 echo    waiting up to 30s for the game to close itself...
 set "GAME_CLOSED="

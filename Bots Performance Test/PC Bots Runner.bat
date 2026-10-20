@@ -10,7 +10,7 @@ set "SYNC_DIR=%TEMP%\underdogs_bot_sync"
 :: Unity's persistentDataPath on Windows. Every instance shares it - the control file the
 :: game polls, the session logs it writes and the bot slot file all live here.
 set "PC_DATA_DIR=%USERPROFILE%\AppData\LocalLow\One Hamsa\UNDERDOGS"
-set "PC_AUTOMATION_CONTROL=%PC_DATA_DIR%\automationControl.txt"
+set "PC_DEBUG_BRIDGE_FILE=%PC_DATA_DIR%\debugBridge.txt"
 set "BOTS_DATA_FILE=%PC_DATA_DIR%\Bots_Local_Data.txt"
 
 :: Unity writes its player log to one fixed path per user, so without -logFile all the
@@ -75,7 +75,7 @@ del "%FW_SCRIPT%" >nul 2>&1
 echo Launching PC instances...
 
 :: A stale word here would be acted on seconds after launch.
-del /q "%PC_AUTOMATION_CONTROL%" >nul 2>&1
+del /q "%PC_DEBUG_BRIDGE_FILE%" >nul 2>&1
 
 :: Start from an empty log directory so a crashed instance from the previous run cannot be
 :: mistaken for this one's.
