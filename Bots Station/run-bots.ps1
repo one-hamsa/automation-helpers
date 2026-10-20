@@ -1,15 +1,10 @@
 
-# Force the script to run as Administrator
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
-    Exit
-}
+# Run by the UnderdogsBotLoop scheduled task (registered by enable-bots.ps1). Needs no admin:
+# the firewall rule for the station's exe is created once by setup-station.ps1.
 
-$DontRun = $false
-
-
-$logPath = Join-Path $PSScriptRoot 'Logs\run-bots.log'
-Start-Transcript -Path $logPath | Out-Null
+$logDir = Join-Path $PSScriptRoot 'Logs'
+New-Item -ItemType Directory -Path (Join-Path $logDir 'Bots Logs') -Force | Out-Null
+Start-Transcript -Path (Join-Path $logDir 'run-bots.log') | Out-Null
 
 #everything is in a try-catch, and will be logged into a log file incase of errors
 try
@@ -44,15 +39,12 @@ $botsDataFile = Join-Path $localLow "Bots_Local_Data.txt"
 # The build came from a downloaded zip -> strip Mark-of-the-Web so it can launch.
 Get-ChildItem -LiteralPath $BuildDir -Recurse -File -ErrorAction SilentlyContinue | Unblock-File
 
-# The game needs network permission, so we elevate this script to admin and give the .exe the permissions
-$fwRule  = "Underdogs Bot Test"
-
-Write-Host "Providing the game with the needed network permissions"
-Write-Host ""
-
-netsh advfirewall firewall delete rule name="$fwRule" 2>`$null
-netsh advfirewall firewall add rule name="$fwRule" dir=in  action=allow program="$exePath" enable=yes
-netsh advfirewall firewall add rule name="$fwRule" dir=out action=allow program="$exePath" enable=yes
+# Must match the rule name in setup-station.ps1.
+$fwRule = "Underdogs Bot Test"
+netsh advfirewall firewall show rule name="$fwRule" | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Firewall rule '$fwRule' not found - run setup-station.ps1 once as admin on this machine."
+}
 
 
 
@@ -63,13 +55,6 @@ Write-Host ""
 Get-CimInstance Win32_Process -Filter "Name = 'Underdogs.exe'" |
     Where-Object { $_.ExecutablePath -like "$BuildDir\*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-
-
-if ($DontRun) 
-{
-Write-Host "THE BOTS DISPATCH IS CURRENTLY DISABLED, if you want to enable it - in this script(Desktop\Bots Workspace\run-bots.ps1) just flip the '$DontRun' flag at the top to '$false'"
-return
-}
 
 
 Write-Host "Resetting the bot slot table"
@@ -103,8 +88,8 @@ if (Test-Path $exePath) {
     for ($i = 1; $i -le $InstanceCount; $i++) {
         Start-Sleep -Seconds 3
 
-        $logPath = "C:\Users\pigsys\Desktop\Bots Station\Logs\Bots Logs\bot_$i.log"
-        $argList = "-batchmode -nographics -logFile `"$logPath`""
+        $botLogPath = Join-Path $logDir "Bots Logs\bot_$i.log"
+        $argList = "-batchmode -nographics -logFile `"$botLogPath`""
 
         # Capture the specific process instance
         $proc = Start-Process -FilePath $exePath `
@@ -115,6 +100,8 @@ if (Test-Path $exePath) {
 
         Write-Host "Launched instance $i/$InstanceCount (PID: $($proc.Id))"
     }
+} else {
+    Write-Warning "No build at $exePath - nothing launched."
 }
 Write-Host "=========================================================================================================================================================================================================="
 Write-Host "========================================================================================== SCRIPT END ===================================================================================================="
