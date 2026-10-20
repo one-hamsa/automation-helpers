@@ -15,11 +15,11 @@ $LoopMinutes = 15
 $ErrorActionPreference = 'Stop'
 
 # The tasks run as whoever runs this script (the runner's account), so the bots share its
-# LocalLow data path. S4U runs them whether or not that user is logged on, without storing a
-# password; the built-in service accounts have no password and use ServiceAccount instead.
+# LocalLow data path. They run only while that user is logged on (a locked screen is fine):
+# a task that also runs when the user is signed out (S4U) can only be registered from an
+# elevated process, and the runner is not elevated.
 $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
-$logonType = if ($identity.User.Value -in 'S-1-5-18', 'S-1-5-19', 'S-1-5-20') { 'ServiceAccount' } else { 'S4U' }
-$principal = New-ScheduledTaskPrincipal -UserId $identity.Name -LogonType $logonType -RunLevel Limited
+$principal = New-ScheduledTaskPrincipal -UserId $identity.Name -LogonType Interactive -RunLevel Limited
 
 function Register-StationTask([string]$name, [string]$script, $trigger, [switch]$disabled)
 {
@@ -27,7 +27,7 @@ function Register-StationTask([string]$name, [string]$script, $trigger, [switch]
     if (-not (Test-Path -LiteralPath $path)) { throw "$script not found at $path" }
 
     $action   = New-ScheduledTaskAction -Execute 'powershell.exe' `
-                    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$path`"" `
+                    -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$path`"" `
                     -WorkingDirectory $PSScriptRoot
     # StartWhenAvailable: a run missed while the machine was off happens once it is back.
     $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
@@ -47,4 +47,4 @@ Register-StationTask 'UnderdogsBotLoop'     'run-bots.ps1' `
     (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $LoopMinutes)) `
     -disabled
 
-Write-Host "Tasks run as $($identity.Name) ($logonType)."
+Write-Host "Tasks run as $($identity.Name), only while that user is logged on."
